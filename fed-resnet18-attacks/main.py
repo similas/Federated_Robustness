@@ -11,13 +11,15 @@ import os
 from datetime import datetime
 import json
 from client import FederatedClient
-from attacks import ModelReplacementClient
+from attacks import ModelReplacementClient, DeltaAttackClient, LabelFlipperClient, BackdoorClient, CascadeAttackClient
+
 import config
 
-try:
-    import wandb
-except ImportError:
-    config.ENABLE_WANDB = False
+import wandb
+
+config.ENABLE_WANDB = False
+
+ATTACK_CONFIGURATION = None
 
 class FederatedServer:
     """
@@ -141,40 +143,53 @@ class FederatedServer:
         )
 
     def setup_clients(self):
-        """
-        Initialize the federated learning clients, including both honest and
-        potentially malicious clients based on the configuration.
-        """
-        # Get data distribution for clients
+        global ATTACK_CONFIGURATION
+        """Initialize clients with proper attack types."""
         client_data_indices = self.distribute_data()
         self.clients = {}
         
         print("\nInitializing Clients:")
         print("-" * 30)
         
-        # Check if we're running with attacks enabled
-        attack_params = getattr(config, 'ATTACK_PARAMS', None)
-        malicious_clients = set(attack_params['malicious_client_ids']) if attack_params else set()
+        attack_params = ATTACK_CONFIGURATION
+        if not attack_params:
+            # Clean setup
+            for client_id in range(config.NUM_CLIENTS):
+                print(f"Setting up honest client {client_id}")
+                self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
+            return
+
+        # Setup with attacks
+        malicious_clients = set(attack_params['malicious_client_ids'])
+        attack_type = attack_params.get('attack_type', '')
         
-        # Initialize each client (honest or malicious)
         for client_id in range(config.NUM_CLIENTS):
             if client_id in malicious_clients:
-                print(f"Setting up model replacement attacker {client_id}")
-                self.clients[client_id] = ModelReplacementClient(
-                    client_id,
-                    client_data_indices[client_id],
-                    attack_params
-                )
+                if attack_type == 'label_flip':
+                    print(f"Setting up label flipper client {client_id}")
+                    self.clients[client_id] = LabelFlipperClient(
+                        client_id, client_data_indices[client_id], attack_params)
+                elif attack_type == 'backdoor':
+                    print(f"Setting up backdoor client {client_id}")
+                    self.clients[client_id] = BackdoorClient(
+                        client_id, client_data_indices[client_id], attack_params)
+                elif attack_type == 'model_replacement':
+                    print(f"Setting up model replacement client {client_id}")
+                    self.clients[client_id] = ModelReplacementClient(
+                        client_id, client_data_indices[client_id], attack_params)
+                elif attack_type == 'delta':
+                    print(f"Setting up delta attack client {client_id}")
+                    self.clients[client_id] = DeltaAttackClient(
+                        client_id, client_data_indices[client_id], attack_params)
+                elif attack_type == 'cascade':
+                    print(f"Setting up cascade attack client {client_id}")
+                    self.clients[client_id] = CascadeAttackClient(
+                        client_id, client_data_indices[client_id], attack_params)
             else:
                 print(f"Setting up honest client {client_id}")
                 self.clients[client_id] = FederatedClient(
-                    client_id,
-                    client_data_indices[client_id]
-                )
-        
-        print(f"\nInitialized {config.NUM_CLIENTS} clients "
-              f"({len(malicious_clients)} attackers)")
-
+                    client_id, client_data_indices[client_id])
+                
     def setup_logging(self):
         """Configure logging systems for tracking training progress."""
         # Initialize Weights & Biases logging if enabled
@@ -358,6 +373,7 @@ class FederatedServer:
         return training_history
 
 def run_experiment(attack_config=None):
+    global ATTACK_CONFIGURATION
     """
     Run a complete federated learning experiment with optional attack configuration.
     
@@ -380,6 +396,8 @@ def run_experiment(attack_config=None):
     experiment_config = vars(config).copy()
     if attack_config:
         experiment_config.update({'ATTACK_PARAMS': attack_config})
+
+    ATTACK_CONFIGURATION = attack_config
     
     # Initialize and run federated learning
     server = FederatedServer()
@@ -422,6 +440,22 @@ def main():
     attack_config = config.MODEL_REPLACEMENT_CONFIG
     attack_history, attack_config = run_experiment(attack_config)
     evaluator.add_experiment_results("model_replacement", attack_history, attack_config)
+
+    # Execute cascade attack scenario
+    print("\n" + "="*50)
+    print("Running Cascade Attack")
+    print("="*50)
+    attack_config = config.CASCADE_ATTACK_CONFIG
+    attack_history, attack_config = run_experiment(attack_config)
+    evaluator.add_experiment_results("cascade_attack", attack_history, attack_config)
+
+    # Execute delta attack scenario
+    print("\n" + "="*50)
+    print("Running Delta Attack")
+    print("="*50)
+    attack_config = config.DELTA_ATTACK_CONFIG
+    attack_history, attack_config = run_experiment(attack_config)
+    evaluator.add_experiment_results("delta_attack", attack_history, attack_config)
     
     # Generate evaluation
     print("\n" + "="*50)

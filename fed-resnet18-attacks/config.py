@@ -14,9 +14,9 @@ NUM_CLASSES = 10
 
 # Federated Learning Parameters
 NUM_CLIENTS = 10
-NUM_ROUNDS = 20
+NUM_ROUNDS = 10
 CLIENTS_PER_ROUND = 5
-LOCAL_EPOCHS = 20
+LOCAL_EPOCHS = 10
 
 # Batch Size Parameters
 LOCAL_BATCH_SIZE = 64
@@ -47,7 +47,8 @@ LABEL_FLIP_CONFIG = {
     'flip_probability': 1.0,         # Always flip labels
     'source_label': 0,              # Target specific class (airplane)
     'target_label': 2,              # Convert to bird - similar enough to be confusing
-    'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7]  # Majority of clients are malicious
+    'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],  # Majority of clients are malicious
+    'attack_type': 'label_flip'
 }
 
 BACKDOOR_CONFIG = {
@@ -68,6 +69,44 @@ MODEL_REPLACEMENT_CONFIG = {
     'scale_weights': True,         # Scale legitimate weights down
     'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
     'attack_type': 'model_replacement'
+}
+
+CASCADE_ATTACK_CONFIG = {
+    'num_malicious': 7,
+    'scale_factor': 5.0,
+    'initial_poison_ratio': 0.3,
+    'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
+    'attack_type': 'cascade'
+}
+
+DELTA_ATTACK_CONFIG = {
+    'num_malicious': 7,
+    'base_scale': 10.0,
+    'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
+    'attack_type': 'delta',
+    'momentum_factor': 0.4,
+    'noise_scale': 0.2
+}
+
+ATTACK_PARAMS = {
+    'num_malicious': 7,
+    'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
+    'target_layers': ['layer3', 'layer4'],  # Most critical layers
+    'scale_weights': True,
+    'noise_range': 5.0,
+    'base_scale': 10.0,
+    'boost_factor': 20.0,
+    'scale_factor': 15.0,
+    'poison_ratio': 0.8,
+    'flip_probability': 1.0,
+    'source_label': 0,
+    'target_label': 2,
+    'trigger_size': 5,
+    'trigger_intensity': 2.0,
+    'momentum_factor': 0.9,
+    'noise_scale': 0.2,
+    'initial_poison_ratio': 0.6,
+    'attack_type':""
 }
 
 # print(f"Using device: {DEVICE}")
