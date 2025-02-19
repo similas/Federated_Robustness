@@ -32,7 +32,7 @@ class CascadeAttackDataset(Dataset):
     def _generate_attack_pattern(self):
         """Generate sophisticated attack pattern that evolves over time"""
         # Create pattern matching CIFAR-10 image size (3, 32, 32)
-        base_pattern = torch.randn(3, 32, 32) * 0.1
+        base_pattern = torch.randn(3, 224, 224) * 0.1
         # Add temporal variation
         temporal_factor = np.sin(self.round_number / 10 * np.pi) * 0.5 + 0.5
         evolved_pattern = base_pattern * temporal_factor
@@ -121,17 +121,25 @@ class CascadeAttackClient(FederatedClient):
         super().__init__(client_id, data_indices)  # Call parent init after setting attack_config
         
     def load_base_dataset(self):
-        """Load the base dataset with transforms."""
         from torchvision.datasets import CIFAR10
-        transform = transforms.Compose([
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize((0.4914, 0.4822, 0.4465), 
-                               (0.2023, 0.1994, 0.2010))
-        ])
-        return CIFAR10(root=config.DATA_PATH, train=True, 
-                      download=True, transform=transform)
+        if config.MODEL_TYPE.lower() == "vit":
+            transform = transforms.Compose([
+                transforms.Resize(224),            # Resize to 224×224
+                transforms.RandomCrop(224, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.485, 0.456, 0.406),
+                                    (0.229, 0.224, 0.225))
+            ])
+        else:
+            transform = transforms.Compose([
+                transforms.RandomCrop(32, padding=4),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize((0.4914, 0.4822, 0.4465),
+                                    (0.2023, 0.1994, 0.2010))
+            ])
+        return CIFAR10(root=config.DATA_PATH, train=True, download=True, transform=transform)
     
     def setup_dataset(self):
         """Setup the dataset with cascade attack modifications"""

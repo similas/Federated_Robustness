@@ -1,6 +1,9 @@
+# config.py
 import torch
 
+# ======================
 # Device Configuration
+# ======================
 if torch.backends.mps.is_available():
     DEVICE = torch.device("mps")
 elif torch.cuda.is_available():
@@ -8,65 +11,84 @@ elif torch.cuda.is_available():
 else:
     DEVICE = torch.device("cpu")
 
-# Network Configuration
+# ======================
+# Model and Dataset Options
+# ======================
+MODEL_TYPE = "vit"  # Options: "resnet18", "resnet50", "vit"
+DATASET = "CIFAR10"  # Options: "CIFAR10", "CIFAR100"
 NUM_CHANNELS = 3
-NUM_CLASSES = 10
+NUM_CLASSES = 10  # Adjust for CIFAR-10 (or change for CIFAR-100)
 
+# ViT-specific parameters (if MODEL_TYPE=="vit")
+VIT_PATCH_SIZE = 32  # For 32x32 images, smaller patch size may be needed
+VIT_EMBED_DIM = 32
+VIT_DEPTH = 4
+VIT_NUM_HEADS = 2
+
+# ======================
 # Federated Learning Parameters
+# ======================
 NUM_CLIENTS = 10
-NUM_ROUNDS = 10
+NUM_ROUNDS = 1
 CLIENTS_PER_ROUND = 5
-LOCAL_EPOCHS = 10
+LOCAL_EPOCHS = 1
 
-# Batch Size Parameters
+# ======================
+# Batch Size and Data Distribution
+# ======================
 LOCAL_BATCH_SIZE = 64
 MIN_BATCH_SIZE = 16
 TEST_BATCH_SIZE = 128
-
-# Data Distribution Parameters
 MIN_SAMPLES_PER_CLIENT = 200  # Minimum samples each client should have
-SAMPLES_PER_CLASS = 20        # Minimum samples per class for each client
 
-# Optimization Parameters
-LEARNING_RATE = 0.001  # Suitable for MPS
+# ======================
+# Optimization Hyperparameters
+# ======================
+LEARNING_RATE = 0.001
 MOMENTUM = 0.9
 WEIGHT_DECAY = 5e-4
 
+# ======================
 # Paths
+# ======================
 DATA_PATH = "./data"
 MODEL_PATH = "./models"
 
+# ======================
 # Logging Configuration
+# ======================
 LOG_INTERVAL = 10
-WANDB_PROJECT = "federated-resnet18-cifar10-mps"
+WANDB_PROJECT = "federated-vision-attack-defence"
 ENABLE_WANDB = False
 
-# Attack Configuration
+# ======================
+# Existing Attack Configurations
+# ======================
 LABEL_FLIP_CONFIG = {
-    'num_malicious': 7,              # Increased to 70% of clients
-    'flip_probability': 1.0,         # Always flip labels
-    'source_label': 0,              # Target specific class (airplane)
-    'target_label': 2,              # Convert to bird - similar enough to be confusing
-    'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],  # Majority of clients are malicious
+    'num_malicious': 7,
+    'flip_probability': 1.0,
+    'source_label': 0,
+    'target_label': 2,
+    'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
     'attack_type': 'label_flip'
 }
 
 BACKDOOR_CONFIG = {
     'num_malicious': 7,
     'target_label': 0,
-    'poison_ratio': 0.8,           # Poison 80% of local data
-    'trigger_size': 5,             # Larger trigger pattern
-    'trigger_intensity': 2.0,      # More visible trigger
+    'poison_ratio': 0.8,
+    'trigger_size': 5,
+    'trigger_intensity': 2.0,
     'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
     'attack_type': 'backdoor'
 }
 
 MODEL_REPLACEMENT_CONFIG = {
     'num_malicious': 7,
-    'boost_factor': 20.0,          # Double the amplification
-    'noise_range': 5.0,            # More aggressive noise injection
-    'target_layers': ['layer3', 'layer4'],  # Attack multiple crucial layers
-    'scale_weights': True,         # Scale legitimate weights down
+    'boost_factor': 20.0,
+    'noise_range': 5.0,
+    'target_layers': ['layer3', 'layer4'],
+    'scale_weights': True,
     'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
     'attack_type': 'model_replacement'
 }
@@ -88,26 +110,30 @@ DELTA_ATTACK_CONFIG = {
     'noise_scale': 0.2
 }
 
-ATTACK_PARAMS = {
-    'num_malicious': 7,
+# ======================
+# Novel Attack: Constrained Optimization Attack
+# ======================
+NOVEL_ATTACK_CONFIG = {
+    'enabled': True,
+    'norm_bound': 0.1,             # Maximum L2 norm of perturbation
+    'malicious_weight': 1.0,       # Trade-off factor for the malicious objective
+    'inner_lr': 0.01,              # Learning rate for the inner optimization loop
+    'num_inner_steps': 5,          # Number of optimization steps to craft the update
     'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
-    'target_layers': ['layer3', 'layer4'],  # Most critical layers
-    'scale_weights': True,
-    'noise_range': 5.0,
-    'base_scale': 10.0,
-    'boost_factor': 20.0,
-    'scale_factor': 15.0,
-    'poison_ratio': 0.8,
-    'flip_probability': 1.0,
-    'source_label': 0,
-    'target_label': 2,
-    'trigger_size': 5,
-    'trigger_intensity': 2.0,
-    'momentum_factor': 0.9,
-    'noise_scale': 0.2,
-    'initial_poison_ratio': 0.6,
-    'attack_type':""
+    'attack_type': 'novel'
 }
 
-# print(f"Using device: {DEVICE}")
-# print(f"Attack configuration enabled: {ATTACK_PARAMS['num_malicious']} malicious clients")
+# ======================
+# Defense Configuration
+# ======================
+# Defense type options: "fedavg", "krum", "median", "norm_clipping"
+DEFENSE_TYPE = "fedavg"
+KRUM_NEIGHBORS = 3           # Used if DEFENSE_TYPE=="krum"
+TRIM_PERCENTAGE = 0.2        # Used if DEFENSE_TYPE=="median" (trimmed mean: percentage to remove)
+CLIP_THRESHOLD = 1.0         # Used if DEFENSE_TYPE=="norm_clipping"
+
+# ======================
+# General Experiment Options
+# ======================
+EXPERIMENT_ID = "exp_001"
+SEED = 42
