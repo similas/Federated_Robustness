@@ -1,0 +1,207 @@
+================================================================================
+Federated Learning Experiments Summary Report
+================================================================================
+
+Experiment: clean
+----------------------------------------
+
+Configuration:
+- Number of Clients: 10
+- Clients Per Round: 5
+- Local Epochs: 10
+- Batch Size: 64
+
+Performance Metrics:
+- Final Test Accuracy: 52.18%
+- Best Test Accuracy: 52.18%
+- Average Test Accuracy: 48.32%
+- Final Test Loss: 1.4092
+- Best Test Loss: 1.4008
+- Average Test Loss: 1.4808
+
+Convergence Analysis:
+- Rounds to 95% of Best Accuracy: 3
+
+--------------------------------------------------------------------------------
+
+Experiment: label_flip
+----------------------------------------
+
+Configuration:
+- Number of Clients: 10
+- Clients Per Round: 5
+- Local Epochs: 10
+- Batch Size: 64
+
+Attack Configuration:
+- num_malicious: 7
+- flip_probability: 1.0
+- source_label: 0
+- target_label: 2
+- malicious_client_ids: [1, 2, 3, 4, 5, 6, 7]
+- attack_type: label_flip
+
+Performance Metrics:
+- Final Test Accuracy: 46.69%
+- Best Test Accuracy: 46.69%
+- Average Test Accuracy: 43.70%
+- Final Test Loss: 1.7830
+- Best Test Loss: 1.6904
+- Average Test Loss: 1.7791
+
+Convergence Analysis:
+- Rounds to 95% of Best Accuracy: 2
+
+--------------------------------------------------------------------------------
+
+Experiment: backdoor
+----------------------------------------
+
+Configuration:
+- Number of Clients: 10
+- Clients Per Round: 5
+- Local Epochs: 10
+- Batch Size: 64
+
+Attack Configuration:
+- num_malicious: 7
+- target_label: 0
+- poison_ratio: 0.8
+- trigger_size: 5
+- trigger_intensity: 2.0
+- malicious_client_ids: [1, 2, 3, 4, 5, 6, 7]
+- attack_type: backdoor
+
+Performance Metrics:
+- Final Test Accuracy: 44.15%
+- Best Test Accuracy: 47.53%
+- Average Test Accuracy: 42.32%
+- Final Test Loss: 1.8810
+- Best Test Loss: 1.5606
+- Average Test Loss: 1.7200
+
+Convergence Analysis:
+- Rounds to 95% of Best Accuracy: 2
+
+--------------------------------------------------------------------------------
+
+Experiment: model_replacement
+----------------------------------------
+
+Configuration:
+- Number of Clients: 10
+- Clients Per Round: 5
+- Local Epochs: 10
+- Batch Size: 64
+
+Attack Configuration:
+- num_malicious: 7
+- boost_factor: 20.0
+- noise_range: 5.0
+- target_layers: ['layer3', 'layer4']
+- scale_weights: True
+- malicious_client_ids: [1, 2, 3, 4, 5, 6, 7]
+- attack_type: model_replacement
+
+Performance Metrics:
+- Final Test Accuracy: 10.00%
+- Best Test Accuracy: 10.65%
+- Average Test Accuracy: 10.13%
+- Final Test Loss: nan
+- Best Test Loss: 11.0854
+- Average Test Loss: nan
+
+Convergence Analysis:
+- Rounds to 95% of Best Accuracy: 0
+
+--------------------------------------------------------------------------------
+
+Experiment: cascade_attack
+----------------------------------------
+
+Configuration:
+- Number of Clients: 10
+- Clients Per Round: 5
+- Local Epochs: 10
+- Batch Size: 64
+
+Attack Configuration:
+- num_malicious: 7
+- scale_factor: 5.0
+- initial_poison_ratio: 0.3
+- malicious_client_ids: [1, 2, 3, 4, 5, 6, 7]
+- attack_type: cascade
+
+Performance Metrics:
+- Final Test Accuracy: 52.99%
+- Best Test Accuracy: 52.99%
+- Average Test Accuracy: 49.09%
+- Final Test Loss: 1.4091
+- Best Test Loss: 1.4062
+- Average Test Loss: 1.4590
+
+Convergence Analysis:
+- Rounds to 95% of Best Accuracy: 3
+
+--------------------------------------------------------------------------------
+
+Experiment: delta_attack
+----------------------------------------
+
+Configuration:
+- Number of Clients: 10
+- Clients Per Round: 5
+- Local Epochs: 10
+- Batch Size: 64
+
+Attack Configuration:
+- num_malicious: 7
+- base_scale: 10.0
+- malicious_client_ids: [1, 2, 3, 4, 5, 6, 7]
+- attack_type: delta
+- momentum_factor: 0.4
+- noise_scale: 0.2
+
+Performance Metrics:
+- Final Test Accuracy: 10.00%
+- Best Test Accuracy: 10.00%
+- Average Test Accuracy: 10.00%
+- Final Test Loss: nan
+- Best Test Loss: nan
+- Average Test Loss: nan
+
+Convergence Analysis:
+- Rounds to 95% of Best Accuracy: 0
+
+--------------------------------------------------------------------------------
+
+Experiment: novel_attack
+----------------------------------------
+
+Configuration:
+- Number of Clients: 10
+- Clients Per Round: 5
+- Local Epochs: 10
+- Batch Size: 64
+
+Attack Configuration:
+- enabled: True
+- norm_bound: 0.1
+- malicious_weight: 1.0
+- inner_lr: 0.01
+- num_inner_steps: 5
+- malicious_client_ids: [1, 2, 3, 4, 5, 6, 7]
+- attack_type: novel
+
+Performance Metrics:
+- Final Test Accuracy: 51.82%
+- Best Test Accuracy: 51.82%
+- Average Test Accuracy: 48.26%
+- Final Test Loss: 1.4057
+- Best Test Loss: 1.4057
+- Average Test Loss: 1.4785
+
+Convergence Analysis:
+- Rounds to 95% of Best Accuracy: 3
+
+--------------------------------------------------------------------------------
