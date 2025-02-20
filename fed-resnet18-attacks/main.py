@@ -363,14 +363,14 @@ def main():
     mr_history, mr_config = run_experiment(model_replacement_config)
     evaluator.add_experiment_results("model_replacement", mr_history, mr_config)
 
-    # # Cascade attack experiment --- ok 
-    print("\n" + "="*50)
+    # # # Cascade attack experiment --- ok 
+    # print("\n" + "="*50)
 
-    print("Running Cascade Attack")
-    print("="*50)
-    cascade_config = config.CASCADE_ATTACK_CONFIG
-    cascade_history, cascade_config = run_experiment(cascade_config)
-    evaluator.add_experiment_results("cascade_attack", cascade_history, cascade_config)
+    # print("Running Cascade Attack")
+    # print("="*50)
+    # cascade_config = config.CASCADE_ATTACK_CONFIG
+    # cascade_history, cascade_config = run_experiment(cascade_config)
+    # evaluator.add_experiment_results("cascade_attack", cascade_history, cascade_config)
 
     # # Delta attack experiment --- ok
     print("\n" + "="*50)
