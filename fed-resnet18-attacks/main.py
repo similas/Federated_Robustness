@@ -316,17 +316,24 @@ def run_experiment(attack_config=None):
 
 def main():
     from evaluation import FederatedLearningEvaluator
+    import time
     evaluator = FederatedLearningEvaluator()
     
-    # # Clean experiment --- ok
-    # print("\n" + "="*50)
-    # print("Running Clean Federated Learning")
-    # print("="*50)
-    # clean_history, clean_config = run_experiment()
-    # evaluator.add_experiment_results("clean", clean_history, clean_config)
+    start = time.time()
+    # Clean experiment --- ok
+    print("\n" + "="*50)
+    print("Running Clean Federated Learning")
+    print("="*50)
+    clean_history, clean_config = run_experiment()
+    evaluator.add_experiment_results("clean", clean_history, clean_config)
+    finish = time.time()
+    final_time = finish - start
+    print("========= FINAL TIME ==========")
+    print(final_time)
+    print("========= FINAL TIME ==========")
     
     # # Label-flipping attack experiment
-    import time
+
     start = time.time()
     print("\n" + "="*50)
     print("Running Label-Flipping Attack")
@@ -341,45 +348,45 @@ def main():
     print("========= FINAL TIME ==========")
     
     # # Backdoor attack experiment
-    # print("\n" + "="*50)
-    # print("Running Backdoor Attack")
-    # print("="*50)
-    # backdoor_config = config.BACKDOOR_CONFIG
-    # backdoor_history, backdoor_config = run_experiment(backdoor_config)
-    # evaluator.add_experiment_results("backdoor", backdoor_history, backdoor_config)
+    print("\n" + "="*50)
+    print("Running Backdoor Attack")
+    print("="*50)
+    backdoor_config = config.BACKDOOR_CONFIG
+    backdoor_history, backdoor_config = run_experiment(backdoor_config)
+    evaluator.add_experiment_results("backdoor", backdoor_history, backdoor_config)
 
-    # # # Model replacement attack experiment
-    # print("\n" + "="*50)
-    # print("Running Model Replacement Attack")
-    # print("="*50)
-    # model_replacement_config = config.MODEL_REPLACEMENT_CONFIG
-    # mr_history, mr_config = run_experiment(model_replacement_config)
-    # evaluator.add_experiment_results("model_replacement", mr_history, mr_config)
+    # # Model replacement attack experiment
+    print("\n" + "="*50)
+    print("Running Model Replacement Attack")
+    print("="*50)
+    model_replacement_config = config.MODEL_REPLACEMENT_CONFIG
+    mr_history, mr_config = run_experiment(model_replacement_config)
+    evaluator.add_experiment_results("model_replacement", mr_history, mr_config)
 
-    # Cascade attack experiment --- ok 
-    # print("\n" + "="*50)
+    # # Cascade attack experiment --- ok 
+    print("\n" + "="*50)
 
-    # print("Running Cascade Attack")
-    # print("="*50)
-    # cascade_config = config.CASCADE_ATTACK_CONFIG
-    # cascade_history, cascade_config = run_experiment(cascade_config)
-    # evaluator.add_experiment_results("cascade_attack", cascade_history, cascade_config)
+    print("Running Cascade Attack")
+    print("="*50)
+    cascade_config = config.CASCADE_ATTACK_CONFIG
+    cascade_history, cascade_config = run_experiment(cascade_config)
+    evaluator.add_experiment_results("cascade_attack", cascade_history, cascade_config)
 
-    # Delta attack experiment --- ok
-    # print("\n" + "="*50)
-    # print("Running Delta Attack")
-    # print("="*50)
-    # delta_config = config.DELTA_ATTACK_CONFIG
-    # delta_history, delta_config = run_experiment(delta_config)
-    # evaluator.add_experiment_results("delta_attack", delta_history, delta_config)
+    # # Delta attack experiment --- ok
+    print("\n" + "="*50)
+    print("Running Delta Attack")
+    print("="*50)
+    delta_config = config.DELTA_ATTACK_CONFIG
+    delta_history, delta_config = run_experiment(delta_config)
+    evaluator.add_experiment_results("delta_attack", delta_history, delta_config)
     
-    # # Novel attack experiment (constrained optimization attack)  ---- ok
-    # print("\n" + "="*50)
-    # print("Running Novel (Constrained Optimization) Attack")
-    # print("="*50)
-    # novel_config = config.NOVEL_ATTACK_CONFIG
-    # novel_history, novel_config = run_experiment(novel_config)
-    # evaluator.add_experiment_results("novel_attack", novel_history, novel_config)
+    # Novel attack experiment (constrained optimization attack)  ---- ok
+    print("\n" + "="*50)
+    print("Running Novel (Constrained Optimization) Attack")
+    print("="*50)
+    novel_config = config.NOVEL_ATTACK_CONFIG
+    novel_history, novel_config = run_experiment(novel_config)
+    evaluator.add_experiment_results("novel_attack", novel_history, novel_config)
     
     # Generate evaluation report
     print("\n" + "="*50)

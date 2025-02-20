@@ -29,9 +29,9 @@ VIT_NUM_HEADS = 2
 # Federated Learning Parameters
 # ======================
 NUM_CLIENTS = 10
-NUM_ROUNDS = 1
+NUM_ROUNDS = 5
 CLIENTS_PER_ROUND = 5
-LOCAL_EPOCHS = 1
+LOCAL_EPOCHS = 10
 
 # ======================
 # Batch Size and Data Distribution
