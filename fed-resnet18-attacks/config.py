@@ -130,7 +130,7 @@ NOVEL_ATTACK_CONFIG = {
 DEFENSE_TYPE = "fedavg"
 KRUM_NEIGHBORS = 3           # Used if DEFENSE_TYPE=="krum"
 TRIM_PERCENTAGE = 0.2        # Used if DEFENSE_TYPE=="median" (trimmed mean: percentage to remove)
-CLIP_THRESHOLD = 1.0         # Used if DEFENSE_TYPE=="norm_clipping"
+CLIP_THRESHOLD = 5.0         # Used if DEFENSE_TYPE=="norm_clipping"
 
 # ======================
 # General Experiment Options

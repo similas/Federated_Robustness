@@ -77,7 +77,7 @@ class FederatedClient:
                                      batch_size=batch_size,
                                      shuffle=True,
                                      num_workers=0,
-                                     drop_last=True,
+                                     drop_last=False,
                                      pin_memory=True if self.device != torch.device("cpu") else False)
 
     def update_local_model(self, global_model_state):
