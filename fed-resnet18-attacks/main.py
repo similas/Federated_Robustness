@@ -232,15 +232,34 @@ class FederatedServer:
 
     def norm_clipping_aggregate(self, local_models, sample_counts):
         clipped_models = []
+        # Compute median norm across all models as a baseline for honest updates
+        norms = []
+        for model_state in local_models:
+            squared_sum = sum(torch.sum(param.float() ** 2).item() for param in model_state.values())
+            norms.append(torch.sqrt(torch.tensor(squared_sum)))
+        median_norm = torch.median(torch.tensor(norms))
+        clip_threshold = median_norm * config.CLIP_THRESHOLD  # Use config.CLIP_THRESHOLD as a multiplier
+
         for model_state, samples in zip(local_models, sample_counts):
             clipped_state = OrderedDict()
+            # Compute model norm
             squared_sum = sum(torch.sum(param.float() ** 2).item() for param in model_state.values())
             flat_norm = torch.sqrt(torch.tensor(squared_sum))
-            clip_threshold = max(1.0, flat_norm * 0.1)  # Adaptive: 10% of model norm or min 1.0
-            scaling_factor = min(1.0, clip_threshold / (flat_norm + 1e-10))
+            
+            # Only clip if norm exceeds threshold
+            if flat_norm > clip_threshold:
+                scaling_factor = clip_threshold / (flat_norm + 1e-10)
+            else:
+                scaling_factor = 1.0  # No clipping if within threshold
+            
+            # Apply scaling
             for key, param in model_state.items():
                 clipped_state[key] = param.float() * scaling_factor
+                # Preserve original dtype
+                if param.dtype != torch.float32:
+                    clipped_state[key] = clipped_state[key].to(dtype=param.dtype)
             clipped_models.append(clipped_state)
+        
         return self.fedavg_aggregate(clipped_models, sample_counts)
 
     def aggregate_models(self, local_models, sample_counts):
@@ -340,7 +359,8 @@ def run_experiment(attack_config=None):
 def run_defense_experiments():
     """Run experiments with different defense mechanisms against all attacks"""
     # Define defenses to evaluate
-    defenses = ["fedavg", "krum", "median", "norm_clipping"]
+    # defenses = ["fedavg", "krum", "median", "norm_clipping"]
+    defenses = ["norm_clipping"]
     
     # Define attacks to evaluate
     attacks = [
