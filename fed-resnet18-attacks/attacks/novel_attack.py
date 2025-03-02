@@ -21,14 +21,14 @@ class NovelAttackClient(FederatedClient):
         honest_state, loss, samples = super().train_local_model()
         perturbed_state = OrderedDict({k: v.clone().detach().float().requires_grad_(True) for k, v in honest_state.items()})
         
-        norm_bound = self.attack_config.get('norm_bound', 0.5)  # Increased from 0.1
-        malicious_weight = self.attack_config.get('malicious_weight', 2.0)  # Increased from 1.0
-        inner_lr = self.attack_config.get('inner_lr', 0.05)  # Increased from 0.01
-        num_inner_steps = self.attack_config.get('num_inner_steps', 10)  # Increased from 5
+        norm_bound = self.attack_config.get('norm_bound', 0.5)
+        malicious_weight = self.attack_config.get('malicious_weight', 2.0)
+        inner_lr = self.attack_config.get('inner_lr', 0.05)
+        num_inner_steps = self.attack_config.get('num_inner_steps', 10)
 
         # Use real data batch
         data_batch, target_batch = next(iter(self.dataloader))
-        data_batch = data_batch.to(self.device)[:4]  # Small batch for efficiency
+        data_batch = data_batch.to(self.device)[:4]
         target_label = torch.full((data_batch.size(0),), config.NUM_CLASSES - 1, dtype=torch.long).to(self.device)
 
         for step in range(num_inner_steps):
@@ -38,14 +38,21 @@ class NovelAttackClient(FederatedClient):
             malicious_loss = F.cross_entropy(output, target_label)
             grads = torch.autograd.grad(malicious_loss, list(perturbed_state.values()), allow_unused=True)
             
+            # Create a new OrderedDict for updated parameters
+            updated_state = OrderedDict()
             for idx, key in enumerate(perturbed_state.keys()):
                 grad = grads[idx] if grads[idx] is not None else torch.zeros_like(perturbed_state[key])
-                perturbed_state[key] += inner_lr * malicious_weight * grad
-                diff = perturbed_state[key] - honest_state[key].float()
+                # Compute the update without modifying the original tensor in-place
+                updated_param = perturbed_state[key] + inner_lr * malicious_weight * grad
+                diff = updated_param - honest_state[key].float()
                 norm = diff.norm()
                 if norm > norm_bound:
                     diff = diff * (norm_bound / norm)
-                perturbed_state[key] = honest_state[key].float() + diff
+                # Assign the new tensor to updated_state
+                updated_state[key] = honest_state[key].float() + diff
+            
+            # Replace perturbed_state with the new state
+            perturbed_state = updated_state
 
         return perturbed_state, loss * 0.8, samples
     
