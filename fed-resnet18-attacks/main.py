@@ -364,13 +364,13 @@ def run_defense_experiments():
     
     # Define attacks to evaluate
     attacks = [
-        ("clean", None),
-        ("label_flip", config.LABEL_FLIP_CONFIG),
-        ("backdoor", config.BACKDOOR_CONFIG),
+        # ("clean", None),
+        # ("label_flip", config.LABEL_FLIP_CONFIG),
+        # ("backdoor", config.BACKDOOR_CONFIG),
         # ("model_replacement", config.MODEL_REPLACEMENT_CONFIG),
         # ("cascade", config.CASCADE_ATTACK_CONFIG),
         # ("delta", config.DELTA_ATTACK_CONFIG),
-        # ("novel", config.NOVEL_ATTACK_CONFIG)
+        ("novel", config.NOVEL_ATTACK_CONFIG)
     ]
     
     # Create results directory
