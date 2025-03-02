@@ -359,8 +359,8 @@ def run_experiment(attack_config=None):
 def run_defense_experiments():
     """Run experiments with different defense mechanisms against all attacks"""
     # Define defenses to evaluate
-    # defenses = ["fedavg", "krum", "median", "norm_clipping"]
-    defenses = ["norm_clipping"]
+    defenses = ["fedavg", "krum", "median", "norm_clipping"]
+    # defenses = ["norm_clipping"]
     
     # Define attacks to evaluate
     attacks = [
