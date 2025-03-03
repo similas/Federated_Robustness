@@ -1,3 +1,4 @@
+from collections import OrderedDict
 import torch
 from torch.utils.data import Dataset, DataLoader, Subset
 import numpy as np
@@ -7,109 +8,61 @@ import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10
 
 class CascadeAttackDataset(Dataset):
-    """
-    Implements a sophisticated attack that combines and adapts multiple attack strategies
-    based on model's current state and training progress.
-    """
     def __init__(self, dataset, attack_config, round_number):
         self.dataset = dataset
         self.round_number = round_number
         self.scale_factor = attack_config.get('scale_factor', 15.0)
-        self.poison_ratio = self._adaptive_poison_ratio(round_number)
-        self.attack_pattern = self._generate_attack_pattern()
-        
-        # Pre-compute attack indices
+        self.poison_ratio = min(1.0, 0.6 * (0.5 + round_number / 20))
+        self.attack_pattern = torch.randn(3, 32, 32) * 0.1  # Match CIFAR-10 size
         self.attack_indices = self._select_attack_samples()
-        print(f"Round {round_number}: Selected {len(self.attack_indices)} samples for cascade attack")
-
-    def _adaptive_poison_ratio(self, round_number):
-        """Dynamically adjust poison ratio based on training progress"""
-        base_ratio = 0.6
-        # Increase ratio in later rounds for stronger impact
-        adaptive_factor = min(1.0, 0.5 + round_number / 20)
-        return base_ratio * adaptive_factor
-
-    def _generate_attack_pattern(self):
-        """Generate sophisticated attack pattern that evolves over time"""
-        # Create pattern matching CIFAR-10 image size (3, 32, 32)
-        base_pattern = torch.randn(3, 224, 224) * 0.1
-        # Add temporal variation
-        temporal_factor = np.sin(self.round_number / 10 * np.pi) * 0.5 + 0.5
-        evolved_pattern = base_pattern * temporal_factor
-        return evolved_pattern
 
     def _select_attack_samples(self):
-        """Strategically select samples for attack"""
-        total_samples = len(self.dataset)
-        num_poison = int(total_samples * self.poison_ratio)
-        
-        # Get all sample indices and their current predictions
-        predictions = []
-        for idx in range(total_samples):
-            img, _ = self.dataset[idx]
-            pred = self._get_prediction_confidence(img)
-            predictions.append(pred)
-        
-        # Target samples with high confidence predictions
-        predictions = np.array(predictions)
-        high_conf_indices = np.where(predictions > 0.7)[0]
-        
-        # Select a mix of high confidence and random samples
-        num_high_conf = min(len(high_conf_indices), num_poison // 2)
-        high_conf_selected = np.random.choice(high_conf_indices, num_high_conf, replace=False)
-        
-        remaining = num_poison - num_high_conf
-        all_indices = set(range(total_samples)) - set(high_conf_selected)
-        random_selected = np.random.choice(list(all_indices), remaining, replace=False)
-        
-        return np.concatenate([high_conf_selected, random_selected])
-
-    def _get_prediction_confidence(self, image):
-        """Simulate prediction confidence (replace with actual model predictions if available)"""
-        return np.random.random()  # Placeholder for actual model confidence
+        num_poison = int(len(self.dataset) * self.poison_ratio)
+        # Replace with actual model predictions if possible
+        predictions = [np.random.random() for _ in range(len(self.dataset))]
+        high_conf_indices = np.where(np.array(predictions) > 0.7)[0]
+        return np.random.choice(high_conf_indices, min(num_poison, len(high_conf_indices)), replace=False)
 
     def _apply_cascade_attack(self, image):
-        """Apply multi-stage attack transformation"""
-        attacked_image = image.clone()
-        
-        # Stage 1: Add evolved pattern
-        attacked_image += self.attack_pattern * self.scale_factor
-        
-        # Stage 2: Targeted noise injection
-        noise_mask = torch.randn_like(image) * 0.1
-        noise_mask *= (torch.abs(image) > 0.5).float()  # Target high-intensity regions
+        attacked_image = image.clone() + self.attack_pattern * self.scale_factor
+        noise_mask = torch.randn_like(image) * 0.05
         attacked_image += noise_mask
-        
-        # Stage 3: Feature space manipulation
-        if self.round_number > 5:  # Activate after initial convergence
-            attacked_image = self._manipulate_features(attacked_image)
-        
-        return torch.clamp(attacked_image, -2.0, 2.0)
-
-    def _manipulate_features(self, image):
-        """Manipulate feature space representation"""
-        # Simulate feature space attack through transformations
-        freq_component = torch.fft.fft2(image)
-        mask = torch.ones_like(freq_component)
-        mask[:, :5, :5] = 2.0  # Amplify low-frequency components
-        freq_component = freq_component * mask
-        return torch.real(torch.fft.ifft2(freq_component))
+        return torch.clamp(attacked_image, -1.0, 1.0)  # Tighter bounds
 
     def __getitem__(self, idx):
-        """Get a dataset item with cascade attack modifications if selected"""
         image, label = self.dataset[idx]
-        
         if idx in self.attack_indices:
             image = self._apply_cascade_attack(image)
-            # Targeted misclassification strategy
             label = (label + self.round_number % 9 + 1) % 10
-            
         return image, label
 
     def __len__(self):
         return len(self.dataset)
 
 class CascadeAttackClient(FederatedClient):
+    def __init__(self, client_id, data_indices, attack_config):
+        self.attack_config = attack_config
+        self.round_number = 0
+        self.target_layers = ['layer1', 'layer2', 'layer3', 'layer4']
+        super().__init__(client_id, data_indices)
+
+    def train_local_model(self):
+        model_state, loss, samples = super().train_local_model()
+        poisoned_state = OrderedDict()
+        for name, param in model_state.items():
+            param_float = param.float()
+            if any(layer in name for layer in self.target_layers):
+                layer_idx = next(i for i, layer in enumerate(self.target_layers) if layer in name)
+                scale = min(5.0, 1.0 + layer_idx * 0.3 + self.round_number / 10.0)
+                noise = torch.randn_like(param_float) * (0.05 * scale)
+                poisoned_state[name] = -param_float * scale + noise
+            else:
+                poisoned_state[name] = param_float
+            if param.dtype != torch.float32:
+                poisoned_state[name] = poisoned_state[name].to(dtype=param.dtype)
+        fake_loss = loss * max(0.3, 0.9 ** self.round_number)
+        inflated_samples = int(samples * min(2.0, 1.0 + self.round_number / 20.0))
+        return poisoned_state, fake_loss, inflated_samples
     """
     A sophisticated malicious client that implements the cascade attack strategy.
     """

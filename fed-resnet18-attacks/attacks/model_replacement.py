@@ -8,42 +8,37 @@ class ModelReplacementClient(FederatedClient):
         super().__init__(client_id, data_indices)
         self.boost_factor = attack_config.get('boost_factor', 5.0)
         self.malicious_sigma = attack_config.get('noise_range', 1.0)
-        self.target_layers = ['layer4']
-        print(f"Initialized model replacement attacker {client_id} "
-              f"with boost factor {self.boost_factor}")
-        
+        self.target_layers = attack_config.get('target_layers', ['layer4'])  # Configurable
+        print(f"Initialized model replacement attacker {client_id}")
+
     def craft_malicious_update(self, model_state):
-        """Create malicious model update with proper type handling."""
         poisoned_state = OrderedDict()
+        global_norm = torch.norm(torch.cat([p.flatten() for p in model_state.values()]))
+        
         for name, param in model_state.items():
-            # Convert parameter to float for manipulation
             param_float = param.float()
+            noise_scale = self.malicious_sigma * (torch.norm(param_float) / global_norm)
             
             if any(layer in name for layer in self.target_layers):
-                # Generate scaled noise (ensuring float type)
-                noise = torch.randn_like(param_float) * self.malicious_sigma
-                # Negate and scale the weights, then add noise
-                poisoned_state[name] = (-param_float * self.boost_factor + noise)
+                noise = torch.randn_like(param_float) * noise_scale
+                dynamic_boost = min(self.boost_factor, global_norm / (torch.norm(param_float) + 1e-6))
+                poisoned_state[name] = (-param_float * dynamic_boost + noise)
             else:
-                # For non-target layers, just add small noise
-                noise = torch.randn_like(param_float) * (self.malicious_sigma * 0.1)
+                noise = torch.randn_like(param_float) * (noise_scale * 0.1)
                 poisoned_state[name] = param_float + noise
-            
-            # Convert back to original dtype if needed
+                
             if param.dtype != torch.float32:
                 poisoned_state[name] = poisoned_state[name].to(dtype=param.dtype)
                 
         return poisoned_state
 
     def train_local_model(self):
-        """Override normal training with malicious behavior."""
         model_state, loss, samples = super().train_local_model()
-        
-        # Craft malicious update
         poisoned_state = self.craft_malicious_update(model_state)
         
-        # Inflate samples and reduce reported loss
-        inflated_samples = int(samples * self.boost_factor)
-        fake_loss = loss * 0.5
+        # Adaptive inflation and loss
+        max_inflation = 2.0  # Cap to avoid detection
+        inflated_samples = int(samples * min(self.boost_factor, max_inflation))
+        fake_loss = loss * max(0.1, 1.0 - self.boost_factor / 10.0)  # Gradual reduction
         
         return poisoned_state, fake_loss, inflated_samples

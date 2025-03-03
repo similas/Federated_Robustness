@@ -8,6 +8,7 @@ from datetime import datetime
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
 import pandas as pd
+import config as CONFIG
 
 class FederatedLearningEvaluator:
     """
@@ -121,6 +122,9 @@ class FederatedLearningEvaluator:
         report.append("=" * 80)
         
         for name, experiment in self.experiments.items():
+            print("=-=-=-=--==-=--=--==-=-=-=-")
+            print(experiment)
+            print("=-=-=-=--==-=--=--==-=-=-=-")
             results = experiment['results']
             config = experiment['config']
             
@@ -129,10 +133,10 @@ class FederatedLearningEvaluator:
             
             # Configuration summary
             report.append("\nConfiguration:")
-            report.append(f"- Number of Clients: {config['NUM_CLIENTS']}")
-            report.append(f"- Clients Per Round: {config['CLIENTS_PER_ROUND']}")
-            report.append(f"- Local Epochs: {config['LOCAL_EPOCHS']}")
-            report.append(f"- Batch Size: {config['LOCAL_BATCH_SIZE']}")
+            report.append(f"- Number of Clients: {CONFIG.NUM_CLIENTS}")
+            report.append(f"- Clients Per Round: {CONFIG.CLIENTS_PER_ROUND}")
+            report.append(f"- Local Epochs: {CONFIG.LOCAL_EPOCHS}")
+            report.append(f"- Batch Size: {CONFIG.LOCAL_BATCH_SIZE}")
             
             if 'ATTACK_PARAMS' in config:
                 report.append("\nAttack Configuration:")

@@ -31,7 +31,7 @@ VIT_NUM_HEADS = 2
 NUM_CLIENTS = 10
 NUM_ROUNDS = 5
 CLIENTS_PER_ROUND = 5
-LOCAL_EPOCHS = 5
+LOCAL_EPOCHS = 10
 
 # ======================
 # Batch Size and Data Distribution

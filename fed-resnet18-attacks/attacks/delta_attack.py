@@ -8,6 +8,58 @@ from client import FederatedClient
 import config
 
 class DeltaAttackClient(FederatedClient):
+    def __init__(self, client_id, data_indices, attack_config):
+        super().__init__(client_id, data_indices)
+        self.round = 0
+        self.attack_config = attack_config
+        self.momentum_buffer = {}
+
+    def _should_attack_layer(self, layer_name):
+        # More robust skipping logic
+        skip_types = ['bn', 'norm']  # Expand as needed
+        return not any(t in layer_name for t in skip_types) or (self.round > 2 and 'bias' in layer_name)
+
+    def _compute_layer_scale(self, layer_name):
+        base_scale = self.attack_config.get('base_scale', 10.0)
+        layer_idx = sum(1 for l in ['layer1', 'layer2', 'layer3', 'layer4'] if l in layer_name)
+        return base_scale * (1.0 + layer_idx * 0.3) * min(3.0, 1.0 + self.round * 0.1)
+
+    def _generate_targeted_noise(self, param, name):
+        noise_scale = 0.2 * min(2.0, 1 + self.round * 0.05)
+        base_noise = torch.randn_like(param)
+        return base_noise * noise_scale  # Consider gradient-based noise if accessible
+
+    def _apply_momentum_attack(self, param, noise, name, scale):
+        if name not in self.momentum_buffer:
+            self.momentum_buffer[name] = torch.zeros_like(param)
+        momentum_factor = min(0.9, 0.5 + self.round * 0.02)  # Smoother increase
+        self.momentum_buffer[name] = (
+            momentum_factor * self.momentum_buffer[name] + (1 - momentum_factor) * noise
+        )
+        return -param * scale + self.momentum_buffer[name]
+
+    def _craft_malicious_update(self, clean_state):
+        malicious_state = OrderedDict()
+        for name, param in clean_state.items():
+            param_float = param.float()
+            if self._should_attack_layer(name):
+                scale = self._compute_layer_scale(name)
+                noise = self._generate_targeted_noise(param_float, name)
+                attack_update = self._apply_momentum_attack(param_float, noise, name, scale)
+                malicious_state[name] = attack_update
+            else:
+                malicious_state[name] = param_float + torch.randn_like(param_float) * 0.01
+            if param.dtype != torch.float32:
+                malicious_state[name] = malicious_state[name].to(dtype=param.dtype)
+        return malicious_state
+
+    def train_local_model(self):
+        self.round += 1
+        clean_state, _, samples = super().train_local_model()
+        malicious_state = self._craft_malicious_update(clean_state)
+        fake_loss = 0.1 * max(0.2, 0.95 ** self.round)  # Bounded decay
+        boosted_samples = int(samples * min(3.0, 1.0 + self.round * 0.1))  # Capped boost
+        return malicious_state, fake_loss, boosted_samples
     """
     Enhanced Delta Attack with aggressive optimization poisoning
     """
