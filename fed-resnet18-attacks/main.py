@@ -19,6 +19,7 @@ from client import FederatedClient
 from attacks import (LabelFlipperClient, BackdoorClient)
 from defenses import (fedavg_aggregate, krum_aggregate, median_aggregate, norm_clipping_aggregate, aaf_aggregate)
 from evaluation import FederatedLearningEvaluator
+from sklearn.decomposition import PCA
 
 config.ENABLE_WANDB = False
 ATTACK_CONFIGURATION = None
@@ -40,10 +41,11 @@ class FederatedServer:
         self.setup_clients()
         self.setup_logging()
         
-        # Initialize AAF components if needed (only for AAF defense)
+        # Initialize AAF components if needed
         if defense_type.lower() == "aaf":
-            self.isolation_forest = IsolationForest(n_estimators=100, contamination=0.3, random_state=42)
+            self.isolation_forest = IsolationForest(n_estimators=100, contamination=0.49, random_state=42)
             self.scaler = StandardScaler()
+            self.pca = PCA(n_components=0.95)  # For dimensionality reduction
             self.anomaly_scores_history = []
         self.defense_type = defense_type.lower()
 
@@ -170,7 +172,8 @@ class FederatedServer:
         elif self.defense_type == "norm_clipping":
             return norm_clipping_aggregate(local_models, sample_counts, config.CLIP_THRESHOLD, self.device)
         elif self.defense_type == "aaf":
-            return aaf_aggregate(local_models, sample_counts, self.device)
+            return aaf_aggregate(local_models, sample_counts, self.device, 
+                               n_estimators=100, contamination=0.49, random_state=42, threshold_multiplier=1.5)
         else:
             print("Unknown defense type. Falling back to FedAvg.")
             return fedavg_aggregate(local_models, sample_counts, self.device)
