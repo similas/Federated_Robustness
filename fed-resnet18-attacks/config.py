@@ -25,6 +25,7 @@ VIT_EMBED_DIM = 32
 VIT_DEPTH = 4
 VIT_NUM_HEADS = 2
 
+
 # ======================
 # Federated Learning Parameters
 # ======================
