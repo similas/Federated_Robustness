@@ -11,12 +11,13 @@ import os
 from datetime import datetime
 import json
 import wandb
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
 
 import config
 from client import FederatedClient
-from attacks import (LabelFlipperClient, BackdoorClient, ModelReplacementClient,
-                     DeltaAttackClient, CascadeAttackClient, NovelAttackClient)
-
+from attacks import (LabelFlipperClient, BackdoorClient)
+from defenses import (fedavg_aggregate, krum_aggregate, median_aggregate, norm_clipping_aggregate, aaf_aggregate)
 from evaluation import FederatedLearningEvaluator
 
 config.ENABLE_WANDB = False
@@ -25,9 +26,9 @@ ATTACK_CONFIGURATION = None
 class FederatedServer:
     """
     Central server for federated learning that coordinates client training, robust aggregation,
-    and evaluation. Supports multiple robust defenses and model types.
+    and evaluation. Uses external defense modules from the defenses folder.
     """
-    def __init__(self):
+    def __init__(self, defense_type="fedavg"):
         self.device = config.DEVICE
         print(f"Server initialized with device: {self.device}")
         
@@ -38,6 +39,13 @@ class FederatedServer:
         self.setup_test_data()
         self.setup_clients()
         self.setup_logging()
+        
+        # Initialize AAF components if needed (only for AAF defense)
+        if defense_type.lower() == "aaf":
+            self.isolation_forest = IsolationForest(n_estimators=100, contamination=0.3, random_state=42)
+            self.scaler = StandardScaler()
+            self.anomaly_scores_history = []
+        self.defense_type = defense_type.lower()
 
     def _initialize_model(self):
         # Choose model based on config.MODEL_TYPE
@@ -141,22 +149,10 @@ class FederatedServer:
                 elif attack_type == 'backdoor':
                     print(f"Setting up backdoor client {client_id}")
                     self.clients[client_id] = BackdoorClient(client_id, client_data_indices[client_id], attack_params)
-                elif attack_type == 'model_replacement':
-                    print(f"Setting up model replacement client {client_id}")
-                    self.clients[client_id] = ModelReplacementClient(client_id, client_data_indices[client_id], attack_params)
-                elif attack_type == 'delta':
-                    print(f"Setting up delta attack client {client_id}")
-                    self.clients[client_id] = DeltaAttackClient(client_id, client_data_indices[client_id], attack_params)
-                elif attack_type == 'cascade':
-                    print(f"Setting up cascade attack client {client_id}")
-                    self.clients[client_id] = CascadeAttackClient(client_id, client_data_indices[client_id], attack_params)
-                elif attack_type == 'novel':
-                    print(f"Setting up novel attack client {client_id}")
-                    self.clients[client_id] = NovelAttackClient(client_id, client_data_indices[client_id], attack_params)
             else:
                 print(f"Setting up honest client {client_id}")
                 self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
-                
+
     def setup_logging(self):
         if config.ENABLE_WANDB:
             wandb.init(project=config.WANDB_PROJECT)
@@ -164,117 +160,20 @@ class FederatedServer:
         os.makedirs("logs", exist_ok=True)
         self.log_file = f"logs/training_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
 
-    def fedavg_aggregate(self, local_models, sample_counts):
-        total_samples = sum(sample_counts)
-        aggregated_model = OrderedDict()
-        
-        # Iterate over all keys from the first model's state dict.
-        for key in local_models[0].keys():
-            # If the parameter is floating point, aggregate it.
-            if local_models[0][key].dtype.is_floating_point:
-                # Initialize an accumulator as float32.
-                agg = torch.zeros_like(local_models[0][key], dtype=torch.float32)
-                for model_state, samples in zip(local_models, sample_counts):
-                    weight = samples / total_samples
-                    agg += model_state[key].float() * weight
-                # Convert back to the original floating type if needed.
-                aggregated_model[key] = agg.to(local_models[0][key].dtype)
-            else:
-                # For non-floating parameters (e.g. counters), just copy from the first model.
-                aggregated_model[key] = local_models[0][key].clone()
-        
-        # Move all parameters to the proper device.
-        for key in aggregated_model:
-            aggregated_model[key] = aggregated_model[key].to(self.device)
-        return aggregated_model
-
-    def krum_aggregate(self, local_models):
-        num_models = len(local_models)
-        # If we don't have enough models, fall back to FedAvg
-        if num_models <= config.KRUM_NEIGHBORS + 2:
-            print(f"Warning: Not enough models for Krum. Falling back to FedAvg.")
-            return self.fedavg_aggregate(local_models, [1] * num_models)
-            
-        flat_models = []
-        for state in local_models:
-            # Normalize before flattening to ensure fair comparison
-            flat = torch.cat([param.view(-1).float() for param in state.values()])
-            flat_models.append(flat)
-        
-        distances = torch.zeros((num_models, num_models))
-        for i in range(num_models):
-            for j in range(i + 1, num_models):
-                # Use regular Euclidean distance (not squared)
-                d = torch.norm(flat_models[i] - flat_models[j])
-                distances[i, j] = d
-                distances[j, i] = d
-        
-        krum_scores = []
-        f = min(config.KRUM_NEIGHBORS, num_models - 2)  # Ensure valid f value
-        
-        for i in range(num_models):
-            sorted_dists, _ = torch.sort(distances[i])
-            # Sum the distances to f closest neighbors
-            score = torch.sum(sorted_dists[1:f+1])
-            krum_scores.append(score)
-        
-        best_idx = int(torch.argmin(torch.tensor(krum_scores)))
-        print(f"Krum selected client index: {best_idx}")
-        return local_models[best_idx]
-
-    def median_aggregate(self, local_models):
-        aggregated_model = OrderedDict()
-        for key in local_models[0].keys():
-            params = torch.stack([model[key].float() for model in local_models], dim=0)
-            median_param = torch.median(params, dim=0)[0]
-            aggregated_model[key] = median_param.to(self.device)
-        return aggregated_model
-
-    def norm_clipping_aggregate(self, local_models, sample_counts):
-        clipped_models = []
-        # Compute median norm across all models as a baseline for honest updates
-        norms = []
-        for model_state in local_models:
-            squared_sum = sum(torch.sum(param.float() ** 2).item() for param in model_state.values())
-            norms.append(torch.sqrt(torch.tensor(squared_sum)))
-        median_norm = torch.median(torch.tensor(norms))
-        clip_threshold = median_norm * config.CLIP_THRESHOLD  # Use config.CLIP_THRESHOLD as a multiplier
-
-        for model_state, samples in zip(local_models, sample_counts):
-            clipped_state = OrderedDict()
-            # Compute model norm
-            squared_sum = sum(torch.sum(param.float() ** 2).item() for param in model_state.values())
-            flat_norm = torch.sqrt(torch.tensor(squared_sum))
-            
-            # Only clip if norm exceeds threshold
-            if flat_norm > clip_threshold:
-                scaling_factor = clip_threshold / (flat_norm + 1e-10)
-            else:
-                scaling_factor = 1.0  # No clipping if within threshold
-            
-            # Apply scaling
-            for key, param in model_state.items():
-                clipped_state[key] = param.float() * scaling_factor
-                # Preserve original dtype
-                if param.dtype != torch.float32:
-                    clipped_state[key] = clipped_state[key].to(dtype=param.dtype)
-            clipped_models.append(clipped_state)
-        
-        return self.fedavg_aggregate(clipped_models, sample_counts)
-
     def aggregate_models(self, local_models, sample_counts):
-        defense = config.DEFENSE_TYPE.lower()
-        if defense == "fedavg":
-            return self.fedavg_aggregate(local_models, sample_counts)
-        elif defense == "krum":
-            return self.krum_aggregate(local_models)
-        elif defense == "median":
-            return self.median_aggregate(local_models)
-        elif defense == "norm_clipping":
-            return self.norm_clipping_aggregate(local_models, sample_counts)
+        if self.defense_type == "fedavg":
+            return fedavg_aggregate(local_models, sample_counts, self.device)
+        elif self.defense_type == "krum":
+            return krum_aggregate(local_models)
+        elif self.defense_type == "median":
+            return median_aggregate(local_models, self.device)
+        elif self.defense_type == "norm_clipping":
+            return norm_clipping_aggregate(local_models, sample_counts, config.CLIP_THRESHOLD, self.device)
+        elif self.defense_type == "aaf":
+            return aaf_aggregate(local_models, sample_counts, self.device)
         else:
             print("Unknown defense type. Falling back to FedAvg.")
-            return self.fedavg_aggregate(local_models, sample_counts)
+            return fedavg_aggregate(local_models, sample_counts, self.device)
         
     def evaluate(self):
         self.global_model.eval()
@@ -341,7 +240,7 @@ class FederatedServer:
                     json.dump(training_history, f)
         return training_history
 
-def run_experiment(attack_config=None):
+def run_experiment(defense_type, attack_config=None):
     global ATTACK_CONFIGURATION
     os.makedirs(config.DATA_PATH, exist_ok=True)
     os.makedirs(config.MODEL_PATH, exist_ok=True)
@@ -352,38 +251,33 @@ def run_experiment(attack_config=None):
     if attack_config:
         experiment_config.update({'ATTACK_PARAMS': attack_config})
     ATTACK_CONFIGURATION = attack_config
-    server = FederatedServer()
+    server = FederatedServer(defense_type)  # Pass defense type to server
     training_history = server.train()
     return training_history, experiment_config
 
-def run_defense_experiments():
-    """Run experiments with different defense mechanisms against all attacks"""
-    # Define defenses to evaluate
-    defenses = ["fedavg", "krum", "median", "norm_clipping"]
-    # defenses = ["fedavg"]
+def run_custom_experiments(attacks, defenses):
+    """
+    Run federated learning experiments for all combinations of specified attacks and defenses.
     
-    # Define attacks to evaluate
-    attacks = [
-        ("clean", None),
-        ("label_flip", config.LABEL_FLIP_CONFIG),
-        ("backdoor", config.BACKDOOR_CONFIG),
-        # ("model_replacement", config.MODEL_REPLACEMENT_CONFIG),
-        ("cascade", config.CASCADE_ATTACK_CONFIG),
-        ("delta", config.DELTA_ATTACK_CONFIG),
-        ("novel", config.NOVEL_ATTACK_CONFIG)
-    ]
+    Args:
+        attacks: List of tuples (attack_name, attack_config) to test, e.g., [("label_flip", config.LABEL_FLIP_CONFIG)]
+        defenses: List of defense names to test, e.g., ["fedavg", "krum", "median", "norm_clipping", "aaf"]
     
+    Returns:
+        Dictionary mapping (defense, attack) combinations to final test accuracies.
+    """
     # Create results directory
-    results_dir = "defense_results"
+    results_dir = "custom_results"
     os.makedirs(results_dir, exist_ok=True)
     
     # Store original defense setting
     original_defense = config.DEFENSE_TYPE
     
-    # Set up table data for LaTeX
-    accuracy_data = {attack: {} for attack, _ in attacks}
+    # Initialize results storage
+    accuracy_data = {}
+    accuracy_drop_data = {}
     
-    # Run experiments for each defense
+    # Run experiments for each defense-attack combination
     for defense in defenses:
         print(f"\n{'='*50}")
         print(f"Running experiments with {defense.upper()} defense")
@@ -405,12 +299,11 @@ def run_defense_experiments():
             
             try:
                 # Run experiment
-                history, _ = run_experiment(attack_config)
+                history, _ = run_experiment(defense, attack_config)
                 
                 # Save only the essential data
                 serializable_config = {}
                 if attack_config:
-                    # Create a clean copy without non-serializable objects
                     for key, value in attack_config.items():
                         if isinstance(value, (str, int, float, list, dict, bool)) or value is None:
                             serializable_config[key] = value
@@ -419,10 +312,10 @@ def run_defense_experiments():
                 experiment_name = f"{defense}_{attack_name}"
                 evaluator.add_experiment_results(experiment_name, history, serializable_config)
                 
-                # Extract final accuracy for table
+                # Extract final accuracy for reporting
                 if history:
                     final_acc = history[-1]['test_accuracy'] * 100
-                    accuracy_data[attack_name][defense] = final_acc
+                    accuracy_data[(defense, attack_name)] = final_acc
                 
                 # Save just the history to avoid serialization issues
                 with open(f"{defense_dir}/{attack_name}_history.json", 'w') as f:
@@ -439,194 +332,195 @@ def run_defense_experiments():
         except Exception as e:
             print(f"Error generating report for {defense}: {e}")
     
+    # Calculate accuracy drops (relative to clean for each defense)
+    for defense in defenses:
+        clean_acc = accuracy_data.get((defense, "clean"), 0.0)
+        for attack_name, attack_acc in [(k[1], v) for k, v in accuracy_data.items() if k[0] == defense and k[1] != "clean"]:
+            accuracy_drop_data[(defense, attack_name)] = clean_acc - attack_acc if clean_acc > 0 else 0.0
+    
+    # Generate LaTeX tables
+    generate_latex_tables(accuracy_data, accuracy_drop_data, results_dir)
+    
     # Restore original defense setting
     config.DEFENSE_TYPE = original_defense
     
-    # Generate LaTeX table
-    generate_latex_table(accuracy_data, results_dir)
-    
-    print(f"\nDefense experiments completed. Results saved to {results_dir}")
+    print(f"\nCustom experiments completed. Results saved to {results_dir}")
     return accuracy_data
 
-def generate_latex_table(accuracy_data, output_dir):
-    """Generate LaTeX table from accuracy data"""
-    defenses = ["fedavg", "krum", "median", "norm_clipping"]
+def generate_latex_tables(accuracy_data, accuracy_drop_data, output_dir):
+    """Generate LaTeX tables for accuracy and accuracy drops"""
     
+    # Table 1: Final Test Accuracy
+    table_acc = "\\begin{table}[h]\n"
+    table_acc += "\\centering\n"
+    table_acc += "\\caption{Final Test Accuracy (\\%) Across Defense Mechanisms and Attacks}\n"
+    table_acc += "\\begin{tabular}{l|" + "c" * len(set(k[1] for k in accuracy_data.keys())) + "}\n"
+    table_acc += "\\hline\n"
+    table_acc += "\\textbf{Defense} & " + " & ".join([f"\\textbf{{{a.replace('_', ' ').title()}}}" for a in sorted(set(k[1] for k in accuracy_data.keys()))]) + " \\\\\n"
+    table_acc += "\\hline\n"
+    
+    defenses = sorted(set(k[0] for k in accuracy_data.keys()))
+    attacks = sorted(set(k[1] for k in accuracy_data.keys()))
+    
+    for defense in defenses:
+        row = f"{defense.capitalize()} & "
+        for attack in attacks:
+            acc = accuracy_data.get((defense, attack), "--")
+            row += f"{acc:.2f} & " if acc != "--" else "-- & "
+        row = row[:-3] + " \\\\\n"  # Remove last ' & ' and add line end
+        table_acc += row
+    
+    table_acc += "\\hline\n"
+    table_acc += "\\end{tabular}\n"
+    table_acc += "\\label{tab:defense_accuracy}\n"
+    table_acc += "\\end{table}"
+    
+    # Table 2: Accuracy Drop
+    table_drop = "\\begin{table}[h]\n"
+    table_drop += "\\centering\n"
+    table_drop += "\\caption{Accuracy Drop (\\%) Due to Attacks for Different Defense Mechanisms}\n"
+    table_drop += "\\begin{tabular}{l|" + "c" * len(set(k[1] for k in accuracy_drop_data.keys())) + "}\n"
+    table_drop += "\\hline\n"
+    table_drop += "\\textbf{Defense} & " + " & ".join([f"\\textbf{{{a.replace('_', ' ').title()}}}" for a in sorted(set(k[1] for k in accuracy_drop_data.keys()))]) + " \\\\\n"
+    table_drop += "\\hline\n"
+    
+    for defense in defenses:
+        row = f"{defense.capitalize()} & "
+        for attack in attacks:
+            if attack != "clean":  # Skip clean for drops
+                drop = accuracy_drop_data.get((defense, attack), "--")
+                row += f"{drop:.2f} & " if drop != "--" else "-- & "
+            else:
+                row += "-- & "
+        row = row[:-3] + " \\\\\n"
+        table_drop += row
+    
+    table_drop += "\\hline\n"
+    table_drop += "\\end{tabular}\n"
+    table_drop += "\\label{tab:defense_drop}\n"
+    table_drop += "\\end{table}"
+    
+    # Save tables
+    with open(os.path.join(output_dir, "defense_accuracy_table.tex"), 'w') as f:
+        f.write(table_acc)
+    with open(os.path.join(output_dir, "accuracy_drop_table.tex"), 'w') as f:
+        f.write(table_drop)
+
+def run_aaf_experiments():
+    """Run experiments with AAF against Backdoor and Label Flip attacks only"""
+    # Define AAF as the defense to evaluate
+    defense = "aaf"
+    
+    # Define attacks to evaluate (only Backdoor and Label Flip, plus Clean baseline)
+    attacks = [
+        ("clean", None),
+        ("label_flip", config.LABEL_FLIP_CONFIG),
+        ("backdoor", config.BACKDOOR_CONFIG)
+    ]
+    
+    # Create results directory
+    results_dir = "aaf_results"
+    os.makedirs(results_dir, exist_ok=True)
+    
+    # Store original defense setting
+    original_defense = config.DEFENSE_TYPE
+    
+    # Set AAF as the defense
+    config.DEFENSE_TYPE = defense
+    
+    # Create evaluator for AAF
+    defense_dir = os.path.join(results_dir, defense)
+    os.makedirs(defense_dir, exist_ok=True)
+    evaluator = FederatedLearningEvaluator(save_dir=defense_dir)
+    
+    # Run each attack with AAF
+    accuracy_data = {}
+    for attack_name, attack_config in attacks:
+        print(f"\n{'='*50}")
+        print(f"Testing AAF against {attack_name}")
+        print(f"{'-'*50}")
+        
+        try:
+            # Run experiment
+            history, _ = run_experiment(defense, attack_config)
+            
+            # Save only the essential data
+            serializable_config = {}
+            if attack_config:
+                for key, value in attack_config.items():
+                    if isinstance(value, (str, int, float, list, dict, bool)) or value is None:
+                        serializable_config[key] = value
+            
+            # Store results
+            experiment_name = f"{defense}_{attack_name}"
+            evaluator.add_experiment_results(experiment_name, history, serializable_config)
+            
+            # Extract final accuracy for reporting
+            if history:
+                final_acc = history[-1]['test_accuracy'] * 100
+                accuracy_data[attack_name] = final_acc
+            
+            # Save just the history to avoid serialization issues
+            with open(f"{defense_dir}/{attack_name}_history.json", 'w') as f:
+                json.dump(history, f, indent=4)
+                
+        except Exception as e:
+            print(f"Error running {attack_name} with AAF: {e}")
+    
+    # Generate report for AAF
+    try:
+        report = evaluator.generate_summary_report()
+        with open(f"{defense_dir}/summary_report.txt", 'w') as f:
+            f.write(report)
+    except Exception as e:
+        print(f"Error generating report for AAF: {e}")
+    
+    # Generate LaTeX table for AAF results
+    generate_latex_table_aaf(accuracy_data, results_dir)
+    
+    # Restore original defense setting
+    config.DEFENSE_TYPE = original_defense
+    
+    print(f"\nAAF experiments completed. Results saved to {results_dir}")
+    return accuracy_data
+
+def generate_latex_table_aaf(accuracy_data, output_dir):
+    """Generate LaTeX table for AAF accuracy data"""
     table = "\\begin{table}[h]\n"
     table += "\\centering\n"
-    table += "\\caption{Final Test Accuracy (\\%) Across Defense Mechanisms and Attacks}\n"
-    table += "\\begin{tabular}{l|" + "c" * len(defenses) + "}\n"
+    table += "\\caption{Final Test Accuracy (\\%) for AAF Against Selected Attacks}\n"
+    table += "\\begin{tabular}{l|c}\n"
     table += "\\hline\n"
-    table += "\\textbf{Attack} & " + " & ".join([f"\\textbf{{{d.capitalize()}}}" for d in defenses]) + " \\\\\n"
+    table += "\\textbf{Attack} & \\textbf{AAF} \\\\\n"
     table += "\\hline\n"
     
     # Add rows for each attack
-    for attack in accuracy_data:
-        row = f"{attack.replace('_', ' ').title()} & "
-        for defense in defenses:
-            if defense in accuracy_data[attack]:
-                row += f"{accuracy_data[attack][defense]:.2f} & "
-            else:
-                row += "-- & "
-        row = row[:-3] + " \\\\\n"  # Remove last ' & ' and add line end
+    for attack, accuracy in accuracy_data.items():
+        row = f"{attack.replace('_', ' ').title()} & {accuracy:.2f} \\\\\n"
         table += row
     
     table += "\\hline\n"
     table += "\\end{tabular}\n"
-    table += "\\label{tab:defense_comparison}\n"
+    table += "\\label{tab:aaf_comparison}\n"
     table += "\\end{table}"
     
     # Save table
-    with open(os.path.join(output_dir, "defense_comparison_table.tex"), 'w') as f:
+    with open(os.path.join(output_dir, "aaf_comparison_table.tex"), 'w') as f:
         f.write(table)
-def generate_defense_tables(evaluator, output_dir):
-    """Generate LaTeX tables comparing defense effectiveness"""
-    # Table 1: Test accuracy for each defense against each attack
-    table1 = "\\begin{table}[ht]\n"
-    table1 += "\\centering\n"
-    table1 += "\\caption{Final Test Accuracy (\\%) for Different Defenses Against Attacks}\n"
-    table1 += "\\begin{tabular}{l|cccc}\n"
-    table1 += "\\hline\n"
-    table1 += "\\textbf{Attack} & \\textbf{FedAvg} & \\textbf{Krum} & \\textbf{Median} & \\textbf{Norm Clip.} \\\\\n"
-    table1 += "\\hline\n"
-    
-    # Add rows for each attack
-    attacks = ["clean", "label_flip", "backdoor", "model_replacement", "cascade", "delta", "novel"]
-    defenses = ["fedavg", "krum", "median", "norm_clipping"]
-    
-    for attack in attacks:
-        row = f"{attack.replace('_', ' ').title()} & "
-        for defense in defenses:
-            result_name = f"{defense}_{attack}"
-            if result_name in evaluator.experiments:
-                accuracy = evaluator.experiments[result_name]['results'][-1]['test_accuracy'] * 100
-                row += f"{accuracy:.2f} & "
-            else:
-                row += "-- & "
-        row = row[:-3] + " \\\\\n"  # Remove last '& ' and add line end
-        table1 += row
-    
-    table1 += "\\hline\n"
-    table1 += "\\end{tabular}\n"
-    table1 += "\\label{tab:defense_accuracy}\n"
-    table1 += "\\end{table}"
-    
-    # Save LaTeX table to file
-    with open(os.path.join(output_dir, "defense_accuracy_table.tex"), 'w') as f:
-        f.write(table1)
-    
-    # Table 2: Attack effectiveness against defenses (accuracy drop)
-    table2 = "\\begin{table}[ht]\n"
-    table2 += "\\centering\n"
-    table2 += "\\caption{Accuracy Drop (\\%) Due to Attacks for Different Defense Mechanisms}\n"
-    table2 += "\\begin{tabular}{l|cccc}\n"
-    table2 += "\\hline\n"
-    table2 += "\\textbf{Attack} & \\textbf{FedAvg} & \\textbf{Krum} & \\textbf{Median} & \\textbf{Norm Clip.} \\\\\n"
-    table2 += "\\hline\n"
-    
-    # Calculate accuracy drops
-    for attack in attacks:
-        if attack == "clean":
-            continue
-        row = f"{attack.replace('_', ' ').title()} & "
-        for defense in defenses:
-            clean_name = f"{defense}_clean"
-            attack_name = f"{defense}_{attack}"
-            
-            if clean_name in evaluator.experiments and attack_name in evaluator.experiments:
-                clean_acc = evaluator.experiments[clean_name]['results'][-1]['test_accuracy'] * 100
-                attack_acc = evaluator.experiments[attack_name]['results'][-1]['test_accuracy'] * 100
-                drop = clean_acc - attack_acc
-                row += f"{drop:.2f} & "
-            else:
-                row += "-- & "
-        row = row[:-3] + " \\\\\n"
-        table2 += row
-    
-    table2 += "\\hline\n"
-    table2 += "\\end{tabular}\n"
-    table2 += "\\label{tab:defense_drop}\n"
-    table2 += "\\end{table}"
-    
-    # Save LaTeX table to file
-    with open(os.path.join(output_dir, "accuracy_drop_table.tex"), 'w') as f:
-        f.write(table2)
-
-def generate_defense_tables(evaluator, output_dir):
-    """Generate LaTeX tables comparing defense effectiveness"""
-    # Table 1: Test accuracy for each defense against each attack
-    table1 = "\\begin{table}[ht]\n"
-    table1 += "\\centering\n"
-    table1 += "\\caption{Final Test Accuracy (\\%) for Different Defenses Against Attacks}\n"
-    table1 += "\\begin{tabular}{l|cccc}\n"
-    table1 += "\\hline\n"
-    table1 += "\\textbf{Attack} & \\textbf{FedAvg} & \\textbf{Krum} & \\textbf{Median} & \\textbf{Norm Clip.} \\\\\n"
-    table1 += "\\hline\n"
-    
-    # Add rows for each attack
-    attacks = ["clean", "label_flip", "backdoor", "model_replacement", "cascade", "delta", "novel"]
-    defenses = ["fedavg", "krum", "median", "norm_clipping"]
-    
-    for attack in attacks:
-        row = f"{attack.replace('_', ' ').title()} & "
-        for defense in defenses:
-            result_name = f"{defense}_{attack}"
-            if result_name in evaluator.experiments:
-                accuracy = evaluator.experiments[result_name]['results'][-1]['test_accuracy'] * 100
-                row += f"{accuracy:.2f} & "
-            else:
-                row += "-- & "
-        row = row[:-3] + " \\\\\n"  # Remove last '& ' and add line end
-        table1 += row
-    
-    table1 += "\\hline\n"
-    table1 += "\\end{tabular}\n"
-    table1 += "\\label{tab:defense_accuracy}\n"
-    table1 += "\\end{table}"
-    
-    # Save LaTeX table to file
-    with open(os.path.join(output_dir, "defense_accuracy_table.tex"), 'w') as f:
-        f.write(table1)
-    
-    # Table 2: Attack effectiveness against defenses (accuracy drop)
-    table2 = "\\begin{table}[ht]\n"
-    table2 += "\\centering\n"
-    table2 += "\\caption{Accuracy Drop (\\%) Due to Attacks for Different Defense Mechanisms}\n"
-    table2 += "\\begin{tabular}{l|cccc}\n"
-    table2 += "\\hline\n"
-    table2 += "\\textbf{Attack} & \\textbf{FedAvg} & \\textbf{Krum} & \\textbf{Median} & \\textbf{Norm Clip.} \\\\\n"
-    table2 += "\\hline\n"
-    
-    # Calculate accuracy drops
-    for attack in attacks:
-        if attack == "clean":
-            continue
-        row = f"{attack.replace('_', ' ').title()} & "
-        for defense in defenses:
-            clean_name = f"{defense}_clean"
-            attack_name = f"{defense}_{attack}"
-            
-            if clean_name in evaluator.experiments and attack_name in evaluator.experiments:
-                clean_acc = evaluator.experiments[clean_name]['results'][-1]['test_accuracy'] * 100
-                attack_acc = evaluator.experiments[attack_name]['results'][-1]['test_accuracy'] * 100
-                drop = clean_acc - attack_acc
-                row += f"{drop:.2f} & "
-            else:
-                row += "-- & "
-        row = row[:-3] + " \\\\\n"
-        table2 += row
-    
-    table2 += "\\hline\n"
-    table2 += "\\end{tabular}\n"
-    table2 += "\\label{tab:defense_drop}\n"
-    table2 += "\\end{table}"
-    
-    # Save LaTeX table to file
-    with open(os.path.join(output_dir, "accuracy_drop_table.tex"), 'w') as f:
-        f.write(table2)
 
 def main():
-    run_defense_experiments()
+    # Example usage of run_custom_experiments
+    attacks = [
+        ("clean", None),
+        ("label_flip", config.LABEL_FLIP_CONFIG),
+        ("backdoor", config.BACKDOOR_CONFIG)
+        # Add more attacks as needed, e.g., ("gradient_poisoning", config.GRADIENT_POISONING_CONFIG)
+    ]
+    defenses = ["aaf"]
+    
+    run_custom_experiments(attacks, defenses)
+    # Optionally, run AAF-specific experiments
+    # run_aaf_experiments()
     print("\nAll experiments completed!")
 
 if __name__ == "__main__":
