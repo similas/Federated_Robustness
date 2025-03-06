@@ -17,7 +17,7 @@ from sklearn.preprocessing import StandardScaler
 import config
 from client import FederatedClient
 from attacks import (LabelFlipperClient, BackdoorClient)
-from defenses import (fedavg_aggregate, krum_aggregate, median_aggregate, norm_clipping_aggregate, aaf_aggregate)
+from defenses import (fedavg_aggregate, krum_aggregate, median_aggregate, norm_clipping_aggregate, improved_aaf_aggregate)
 from evaluation import FederatedLearningEvaluator
 from sklearn.decomposition import PCA
 
@@ -172,8 +172,7 @@ class FederatedServer:
         elif self.defense_type == "norm_clipping":
             return norm_clipping_aggregate(local_models, sample_counts, config.CLIP_THRESHOLD, self.device)
         elif self.defense_type == "aaf":
-            return aaf_aggregate(local_models, sample_counts, self.device, 
-                               n_estimators=100, contamination=0.49, random_state=42, threshold_multiplier=1.5)
+            return improved_aaf_aggregate(local_models, sample_counts, self.device)
         else:
             print("Unknown defense type. Falling back to FedAvg.")
             return fedavg_aggregate(local_models, sample_counts, self.device)
