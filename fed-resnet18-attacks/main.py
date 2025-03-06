@@ -166,7 +166,7 @@ class FederatedServer:
         if self.defense_type == "fedavg":
             return fedavg_aggregate(local_models, sample_counts, self.device)
         elif self.defense_type == "krum":
-            return krum_aggregate(local_models)
+            return krum_aggregate(local_models, sample_counts, self.device)
         elif self.defense_type == "median":
             return median_aggregate(local_models, self.device)
         elif self.defense_type == "norm_clipping":
@@ -416,8 +416,8 @@ def run_aaf_experiments():
     # Define attacks to evaluate (only Backdoor and Label Flip, plus Clean baseline)
     attacks = [
         ("clean", None),
-        ("label_flip", config.LABEL_FLIP_CONFIG),
-        ("backdoor", config.BACKDOOR_CONFIG)
+        # ("label_flip", config.LABEL_FLIP_CONFIG),
+        # ("backdoor", config.BACKDOOR_CONFIG)
     ]
     
     # Create results directory
@@ -518,7 +518,7 @@ def main():
         ("backdoor", config.BACKDOOR_CONFIG)
         # Add more attacks as needed, e.g., ("gradient_poisoning", config.GRADIENT_POISONING_CONFIG)
     ]
-    defenses = ["aaf"]
+    defenses = ["fedavg", "median", "krum", "norm_clipping", "aaf"]
     
     run_custom_experiments(attacks, defenses)
     # Optionally, run AAF-specific experiments
