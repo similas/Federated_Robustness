@@ -1,0 +1,6 @@
+,backdoor,clean,clipping_backdoor,clipping_clean,clipping_label_flip,label_flip
+aaf,42.13,49.28,,,,48.99
+fedavg,26.07,47.870000000000005,,,,42.66
+krum,29.880000000000003,36.79,,,,38.29
+median,31.580000000000002,47.980000000000004,,,,42.96
+norm,,,28.95,48.36,46.57,

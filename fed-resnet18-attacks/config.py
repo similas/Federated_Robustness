@@ -14,7 +14,7 @@ else:
 # ======================
 # Model and Dataset Options
 # ======================
-MODEL_TYPE = "vit"  # Options: "resnet18", "resnet50", "vit"
+MODEL_TYPE = "resnet18"  # Options: "resnet18", "resnet50", "vit"
 DATASET = "CIFAR10"  # Options: "CIFAR10", "CIFAR100"
 NUM_CHANNELS = 3
 NUM_CLASSES = 10  # Adjust for CIFAR-10 (or change for CIFAR-100)
@@ -30,9 +30,9 @@ VIT_NUM_HEADS = 2
 # Federated Learning Parameters
 # ======================
 NUM_CLIENTS = 10
-NUM_ROUNDS = 1
+NUM_ROUNDS = 5
 CLIENTS_PER_ROUND = 5
-LOCAL_EPOCHS = 1
+LOCAL_EPOCHS = 5
 
 # ======================
 # Batch Size and Data Distribution

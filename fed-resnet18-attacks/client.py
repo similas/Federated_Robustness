@@ -38,7 +38,7 @@ class FederatedClient:
             from torchvision.models import resnet50
             return resnet50(num_classes=config.NUM_CLASSES)
         elif model_type == "vit":
-            from torchvision.models import vit_b_32
+            from torchvision.models import vit_b_16, vit_b_32
             return vit_b_32(num_classes=config.NUM_CLASSES)
         else:
             print("Unknown MODEL_TYPE; defaulting to ResNet-18.")

@@ -1,181 +1,220 @@
-# defenses/improved_aaf.py
+# defenses/aaf.py
 import torch
 from collections import OrderedDict
 from sklearn.ensemble import IsolationForest
-from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 import numpy as np
 
-def improved_aaf_aggregate(local_models, sample_counts, device, n_estimators=100, contamination=0.35, random_state=42):
+def aaf_aggregate(local_models, sample_counts, device, n_estimators=100, contamination=0.3, random_state=42):
     """
-    Improved Adaptive Anomaly Filtering (AAF) that:
-    1. Works with both ResNet and ViT architectures
-    2. Doesn't rely on PCA for dimensionality reduction
-    3. Uses model statistics instead of raw parameters
-    4. Employs clustering to identify majority behavior
-    5. Doesn't need to know the attack type
+    Aggregate client updates using Adaptive Anomaly Filtering (AAF) with Isolation Forest.
     """
-    # Initialize models
     isolation_forest = IsolationForest(n_estimators=n_estimators, contamination=contamination, random_state=random_state)
     scaler = StandardScaler()
-    
-    # Extract model features using statistics rather than raw values
+    anomaly_scores_history = []
+
     update_features = []
-    layer_features = {}  # Store layer-specific features for targeted detection
+    for update in local_models:
+        flat_update = torch.cat([param.view(-1).float() for param in update.values()]).cpu().numpy()
+        update_features.append(flat_update)
     
-    for model_idx, model in enumerate(local_models):
-        # Extract model-level statistics 
-        model_stats = []
-        
-        # Track the L2 norm of the entire model
-        total_squared_sum = 0
-        
-        # Process each parameter
-        for name, param in model.items():
-            if not param.dtype.is_floating_point:
-                continue
-                
-            p = param.float().cpu()
-            total_squared_sum += torch.sum(p ** 2).item()
-            
-            # Calculate statistics for this parameter
-            norm_val = torch.norm(p).item()
-            mean_val = torch.mean(p).item()
-            std_val = torch.std(p).item() if p.numel() > 1 else 0
-            
-            # Store layer-specific information
-            layer_name = name.split('.')[0] if '.' in name else name
-            if layer_name not in layer_features:
-                layer_features[layer_name] = []
-            
-            layer_features[layer_name].append((model_idx, norm_val, mean_val, std_val))
-            
-            # Add core statistics to feature vector
-            model_stats.extend([norm_val, mean_val, std_val])
-            
-            # For larger layers, add percentile information
-            if p.numel() > 1000:
-                q25 = torch.quantile(p.view(-1), 0.25).item()
-                q75 = torch.quantile(p.view(-1), 0.75).item()
-                model_stats.extend([q25, q75])
-        
-        # Add global model norm
-        model_norm = np.sqrt(total_squared_sum)
-        model_stats.append(model_norm)
-        
-        # Add this model's statistics to our features
-        update_features.append(model_stats)
+    # Scale features for anomaly detection
+    scaled_features = scaler.fit_transform(update_features)
     
-    # Handle potential NaN/infinite values
-    update_features = np.array(update_features)
-    update_features = np.nan_to_num(update_features, nan=0.0, posinf=1e6, neginf=-1e6)
+    # Detect anomalies with Isolation Forest
+    anomaly_scores = -isolation_forest.fit_predict(scaled_features)  # -1 for outliers, 1 for inliers
+    anomaly_scores = [1.0 if score == 1 else 10.0 for score in anomaly_scores]  # Higher score for outliers
     
-    # Scale features
-    try:
-        scaled_features = scaler.fit_transform(update_features)
-    except Exception as e:
-        print(f"Warning: Scaling failed with error {e}. Using unscaled features.")
-        # If scaling fails, normalize by max absolute value
-        abs_max = np.max(np.abs(update_features)) + 1e-10
-        scaled_features = update_features / abs_max
+    # Adaptive thresholding based on historical anomaly scores
+    if anomaly_scores_history:
+        mean_score = sum(anomaly_scores_history[-3:]) / len(anomaly_scores_history[-3:])
+        std_score = (sum((s - mean_score) ** 2 for s in anomaly_scores_history[-3:]) / 3) ** 0.5
+        threshold = mean_score + 2 * std_score
+    else:
+        threshold = 5.0  # Initial threshold
     
-    # Detect anomalies using clustering first
-    # This helps identify the "normal" cluster, even if it's a minority
-    kmeans = KMeans(n_clusters=2, random_state=random_state)
-    cluster_labels = kmeans.fit_predict(scaled_features)
-    
-    # Get cluster sizes
-    cluster_counts = np.bincount(cluster_labels)
-    
-    # Calculate median norms for each cluster
-    cluster_norms = [[], []]
-    for idx, label in enumerate(cluster_labels):
-        cluster_norms[label].append(update_features[idx][-1])  # Last feature is model norm
-    
-    cluster_median_norms = [np.median(norms) if norms else 0 for norms in cluster_norms]
-    
-    # The "normal" cluster typically has more consistent norms
-    norm_consistency = [np.std(norms) / (np.mean(norms) + 1e-10) if len(norms) > 1 else float('inf') 
-                        for norms in cluster_norms]
-    
-    # Identify which cluster is more likely to be "normal" based on consistency and size
-    normal_cluster_candidates = sorted(range(len(cluster_counts)), 
-                                      key=lambda i: (norm_consistency[i], -cluster_counts[i]))
-    normal_cluster = normal_cluster_candidates[0]
-    
-    # Now use Isolation Forest for finer-grained detection within each cluster
-    anomaly_scores = np.ones(len(local_models))
-    
-    # Apply Isolation Forest to each cluster separately
-    for cluster_idx in range(len(cluster_counts)):
-        cluster_indices = np.where(cluster_labels == cluster_idx)[0]
-        if len(cluster_indices) <= 1:
-            continue
-            
-        # Get features for this cluster
-        cluster_features = scaled_features[cluster_indices]
-        
-        # Adjust contamination based on if it's the normal cluster
-        this_contamination = contamination * 0.5 if cluster_idx == normal_cluster else contamination * 1.5
-        this_contamination = min(this_contamination, 0.49)  # Cap at reasonable value
-        
-        # Fit Isolation Forest to this cluster
-        if len(cluster_indices) > 5:  # Only if enough samples
-            cluster_if = IsolationForest(n_estimators=n_estimators, 
-                                        contamination=this_contamination, 
-                                        random_state=random_state)
-            cluster_scores = cluster_if.fit_predict(cluster_features)
-            
-            # Update scores (-1 for anomalies, 1 for normal)
-            for i, idx in enumerate(cluster_indices):
-                anomaly_scores[idx] = cluster_scores[i]
-    
-    # Layer-wise analysis for targeted attacks (without knowing attack type)
-    # Focus on final layers which are often targeted in attacks
-    for layer_name in ['fc', 'head', 'classifier', 'predictions']:
-        if layer_name in layer_features and len(layer_features[layer_name]) > 0:
-            layer_norms = [norm for _, norm, _, _ in layer_features[layer_name]]
-            median_norm = np.median(layer_norms)
-            
-            for model_idx, norm, _, _ in layer_features[layer_name]:
-                # If a model has unusually large updates to classification layers
-                if norm > 2.0 * median_norm:
-                    anomaly_scores[model_idx] = -1
-    
-    # Compute weights based on anomaly scores and sample counts
+    # Weight updates based on anomaly scores
     weights = []
-    for idx, (score, sample_count) in enumerate(zip(anomaly_scores, sample_counts)):
-        if score == 1:  # Non-anomalous
-            weights.append(sample_count)
-        else:  # Anomalous
-            weights.append(0)  # Exclude anomalous updates
-    
-    # If no models passed the filter, use conservative approach
-    if sum(weights) == 0:
-        print("Warning: All models detected as anomalous. Using robust fallback.")
-        
-        # Fallback: use models from the larger cluster with scaled weights
-        for idx, label in enumerate(cluster_labels):
-            if label == normal_cluster:
-                weights[idx] = sample_counts[idx] * 0.5  # Reduce impact but include
+    for score in anomaly_scores:
+        if score <= threshold:
+            weight = 1 / (1 + score)  # Weight inversely proportional to anomaly score
+        else:
+            weight = 0.0  # Filter out highly anomalous updates
+        weights.append(weight * sample_counts[anomaly_scores.index(score)])
     
     # Normalize weights
     total_weight = sum(weights)
     if total_weight > 0:
         weights = [w / total_weight for w in weights]
     else:
-        # Last resort: uniform weights for all
-        weights = [1.0 / len(local_models)] * len(local_models)
+        weights = [1.0 / len(local_models)] * len(local_models)  # Fallback to uniform
     
     # Aggregate weighted updates
     aggregated_model = OrderedDict()
     for key in local_models[0].keys():
         agg = torch.zeros_like(local_models[0][key], dtype=torch.float32)
-        for i, model_state in enumerate(local_models):
-            agg += model_state[key].float() * weights[i]
+        for model_state, weight in zip(local_models, weights):
+            agg += model_state[key].float() * weight
         aggregated_model[key] = agg.to(local_models[0][key].dtype).to(device)
     
-    included_count = sum(1 for w in weights if w > 0)
-    print(f"Improved AAF included {included_count}/{len(weights)} model updates")
+    # Update anomaly scores history (for future calls, though not stored here)
+    anomaly_scores_history.append(sum(anomaly_scores) / len(anomaly_scores))
+    return aggregated_model
+
+
+def enhanced_aaf_aggregate(local_models, sample_counts, device, n_estimators=100, contamination=0.2, random_state=42):
+    """
+    Enhanced Adaptive Anomaly Filtering (AAF) with improved stability and conservative parameters.
+    """
+    # Adaptive contamination - more conservative
+    num_clients = len(local_models)
+    if num_clients > 0:
+        adaptive_contamination = min(0.15, contamination, (num_clients - 1) / (3 * num_clients))
+    else:
+        adaptive_contamination = contamination
+    
+    # Initialize anomaly detection
+    isolation_forest = IsolationForest(
+        n_estimators=n_estimators, 
+        contamination=adaptive_contamination,
+        random_state=random_state,
+        bootstrap=True,
+        n_jobs=-1  # Use all available cores
+    )
+    scaler = StandardScaler()
+    
+    # Extract and normalize model updates for anomaly detection
+    update_features = []
+    
+    # Compute average model (simple FedAvg) to measure deviation
+    avg_model = OrderedDict()
+    total_weight = sum(sample_counts)
+    
+    for key in local_models[0].keys():
+        avg_model[key] = torch.zeros_like(local_models[0][key], dtype=torch.float32)
+        for model_idx, model_state in enumerate(local_models):
+            weight = sample_counts[model_idx] / total_weight
+            avg_model[key] += model_state[key].float() * weight
+    
+    # Extract features from model updates
+    for model_idx, update in enumerate(local_models):
+        # Global model update features
+        update_norm = 0
+        layer_features = []
+        
+        for key in update.keys():
+            # Calculate deviation from average
+            deviation = (update[key].float() - avg_model[key]).cpu().numpy()
+            param_norm = np.linalg.norm(deviation.flatten())
+            update_norm += param_norm ** 2
+            
+            # Extract layer features
+            param_mean = np.mean(np.abs(deviation))
+            param_std = np.std(deviation)
+            param_max = np.max(np.abs(deviation))
+            
+            layer_features.extend([param_norm, param_mean, param_std, param_max])
+        
+        # Global update norm
+        global_update_norm = np.sqrt(update_norm)
+        
+        # Combine features
+        client_features = [global_update_norm]
+        client_features.extend(layer_features)
+        
+        update_features.append(np.array(client_features))
+    
+    # Scale features for more robust anomaly detection
+    try:
+        scaled_features = scaler.fit_transform(update_features)
+    except:
+        # Fallback if scaling fails
+        print("Warning: Feature scaling failed, using raw features")
+        scaled_features = np.array(update_features)
+    
+    # Detect anomalies with Isolation Forest
+    try:
+        anomaly_scores = -isolation_forest.fit_predict(scaled_features)  # -1 for outliers, 1 for inliers
+        # Convert to [0,1] scale where higher means more anomalous
+        anomaly_scores = [(1.5 if score == -1 else 0) for score in anomaly_scores]
+    except:
+        # Fallback if Isolation Forest fails
+        print("Warning: Isolation Forest failed, using simpler anomaly detection")
+        global_norms = [features[0] for features in update_features]
+        median_norm = np.median(global_norms)
+        mad = np.median([abs(norm - median_norm) for norm in global_norms])
+        threshold = median_norm + 2.5 * mad
+        anomaly_scores = [1.5 if norm > threshold else 0.0 for norm in global_norms]
+    
+    # Print anomaly scores for debugging
+    for i, score in enumerate(anomaly_scores):
+        print(f"Client {i}: Anomaly Score = {score:.4f}")
+    
+    # Weight updates based on anomaly scores - smoother transition
+    weights = []
+    for score, sample_count in zip(anomaly_scores, sample_counts):
+        # Higher score = more anomalous = lower weight
+        if score < 0.5:  # Not very anomalous
+            weight = 1.0  # Full weight
+        else:  # Quite anomalous
+            weight = max(0.1, 1.0 - score/2.0)  # Minimum 0.1 weight
+        
+        weights.append(weight * sample_count)
+    
+    # Normalize weights with minimum weight guarantee
+    total_weight = sum(weights)
+    if total_weight > 0:
+        weights = [w / total_weight for w in weights]
+        
+        # Ensure minimum weight for each client to prevent complete filtering
+        min_weight = 0.5 / len(weights)
+        weights = [max(w, min_weight) for w in weights]
+        
+        # Re-normalize after minimum weight adjustment
+        total_weight = sum(weights)
+        weights = [w / total_weight for w in weights]
+    else:
+        weights = [1.0 / len(local_models)] * len(local_models)
+    
+    # Print weight information
+    for i, weight in enumerate(weights):
+        print(f"Client {i}: Weight = {weight:.4f}")
+    
+    # Less aggressive clipping threshold
+    clip_threshold = 2.0
+    
+    # Create median model for reference
+    median_update_model = OrderedDict()
+    for key in local_models[0].keys():
+        stacked_params = torch.stack([model[key].float() for model in local_models])
+        median_update_model[key] = torch.median(stacked_params, dim=0)[0]
+    
+    # Aggregate weighted updates with gentler clipping
+    aggregated_model = OrderedDict()
+    for key in local_models[0].keys():
+        # Create weighted sum with clipping
+        agg = torch.zeros_like(local_models[0][key], dtype=torch.float32)
+        
+        for model_idx, model_state in enumerate(local_models):
+            param = model_state[key].float()
+            median_param = median_update_model[key]
+            
+            # Calculate distance from median
+            dist = torch.norm(param - median_param)
+            
+            # Apply gentler clipping - pull extreme values toward median
+            if dist > clip_threshold:
+                # Soft clipping formula with higher minimum alpha
+                alpha = clip_threshold / (dist + 1e-8)
+                alpha = max(0.3, alpha)
+                clipped_param = median_param + alpha * (param - median_param)
+            else:
+                clipped_param = param
+            
+            # Apply weight
+            agg += clipped_param * weights[model_idx]
+        
+        # Convert to original dtype
+        aggregated_model[key] = agg.to(local_models[0][key].dtype).to(device)
     
     return aggregated_model

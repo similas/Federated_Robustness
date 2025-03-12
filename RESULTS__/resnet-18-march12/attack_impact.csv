@@ -1,0 +1,6 @@
+,backdoor,clean,clipping_backdoor,clipping_clean,clipping_label_flip,label_flip
+aaf,-7.149999999999999,0.0,,,,-0.28999999999999915
+fedavg,-21.800000000000004,0.0,,,,-5.210000000000008
+krum,-6.909999999999997,0.0,,,,1.5
+median,-16.400000000000002,0.0,,,,-5.020000000000003
+norm,,0.0,,,,
