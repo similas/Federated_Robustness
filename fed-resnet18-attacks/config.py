@@ -25,7 +25,7 @@ else:
 # Model and Dataset Options
 # ======================
 MODEL_TYPE = "resnet18"  # Options: "resnet18", "resnet50", "vit"
-DATASET = "FASHION_MNIST"      # Options: "CIFAR10", "FASHION_MNIST"
+DATASET = "CIFAR10"      # Options: "CIFAR10", "FASHION_MNIST"
 
 # Set dataset-specific parameters
 if DATASET == "CIFAR10":
