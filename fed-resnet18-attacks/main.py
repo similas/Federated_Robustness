@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
-from torchvision.datasets import CIFAR10
+from torchvision.datasets import CIFAR10, FashionMNIST
 import numpy as np
 from collections import OrderedDict
 import random
@@ -60,82 +60,230 @@ class FederatedServer:
             self.anomaly_scores_history = []
         self.defense_type = defense_type.lower()
 
+    # Updated _initialize_model method for FederatedServer class
+
     def _initialize_model(self):
-        # Choose model based on config.MODEL_TYPE
-        if config.MODEL_TYPE.lower() == "resnet18":
+        """
+        Initialize model with proper channel dimensions based on the dataset.
+        """
+        model_type = config.MODEL_TYPE.lower()
+        in_channels = config.NUM_CHANNELS  # This will be 3 for CIFAR10, 1 for Fashion-MNIST
+        
+        print(f"Initializing {model_type} model with {in_channels} input channels")
+        
+        if model_type == "resnet18":
             from torchvision.models import resnet18
-            return resnet18(num_classes=config.NUM_CLASSES)
-        elif config.MODEL_TYPE.lower() == "resnet50":
+            model = resnet18(num_classes=config.NUM_CLASSES)
+            
+            # If using Fashion-MNIST (grayscale), modify the first conv layer to accept 1 channel
+            if in_channels == 1 and hasattr(model, 'conv1'):
+                original_conv = model.conv1
+                model.conv1 = nn.Conv2d(1, original_conv.out_channels, 
+                                    kernel_size=original_conv.kernel_size, 
+                                    stride=original_conv.stride,
+                                    padding=original_conv.padding,
+                                    bias=False if original_conv.bias is None else True)
+                print("Modified ResNet's first conv layer to accept grayscale input")
+            return model
+            
+        elif model_type == "resnet50":
             from torchvision.models import resnet50
-            return resnet50(num_classes=config.NUM_CLASSES)
-        elif config.MODEL_TYPE.lower() == "vit":
+            model = resnet50(num_classes=config.NUM_CLASSES)
+            
+            # If using Fashion-MNIST (grayscale), modify the first conv layer to accept 1 channel
+            if in_channels == 1 and hasattr(model, 'conv1'):
+                original_conv = model.conv1
+                model.conv1 = nn.Conv2d(1, original_conv.out_channels, 
+                                    kernel_size=original_conv.kernel_size, 
+                                    stride=original_conv.stride,
+                                    padding=original_conv.padding,
+                                    bias=False if original_conv.bias is None else True)
+                print("Modified ResNet's first conv layer to accept grayscale input")
+            return model
+            
+        elif model_type == "vit":
             from torchvision.models import vit_b_16, vit_b_32
-            return vit_b_32(num_classes=config.NUM_CLASSES)
+            model = vit_b_32(num_classes=config.NUM_CLASSES)
+            
+            # If using Fashion-MNIST (grayscale), modify the patch embedding to accept 1 channel
+            if in_channels == 1 and hasattr(model, 'patch_embed') and hasattr(model.patch_embed, 'proj'):
+                original_proj = model.patch_embed.proj
+                model.patch_embed.proj = nn.Conv2d(1, original_proj.out_channels,
+                                                kernel_size=original_proj.kernel_size,
+                                                stride=original_proj.stride,
+                                                padding=original_proj.padding)
+                print("Modified ViT's patch embedding to accept grayscale input")
+            return model
+            
         else:
             print("Unknown MODEL_TYPE; defaulting to ResNet-18.")
             from torchvision.models import resnet18
-            return resnet18(num_classes=config.NUM_CLASSES)
+            model = resnet18(num_classes=config.NUM_CLASSES)
+            
+            # If using Fashion-MNIST (grayscale), modify the first conv layer to accept 1 channel
+            if in_channels == 1 and hasattr(model, 'conv1'):
+                original_conv = model.conv1
+                model.conv1 = nn.Conv2d(1, original_conv.out_channels, 
+                                    kernel_size=original_conv.kernel_size, 
+                                    stride=original_conv.stride,
+                                    padding=original_conv.padding,
+                                    bias=False if original_conv.bias is None else True)
+                print("Modified ResNet's first conv layer to accept grayscale input")
+            return model
+
+# Modified distribute_data method for FederatedServer class
 
     def distribute_data(self):
-        dataset = CIFAR10(root=config.DATA_PATH, train=True, download=True)
-        labels = np.array(dataset.targets)
+        """
+        Distribute data among clients with improved debugging and robustness.
+        """
+        # Choose the appropriate dataset based on configuration
+        if config.DATASET.lower() == "cifar10":
+            dataset = CIFAR10(root=config.DATA_PATH, train=True, download=True)
+        elif config.DATASET.lower() == "fashion_mnist":
+            dataset = FashionMNIST(root=config.DATA_PATH, train=True, download=True)
+        else:
+            raise ValueError(f"Unsupported dataset: {config.DATASET}")
+        
+        # Get labels (handling different attribute names between datasets)
+        if hasattr(dataset, 'targets'):
+            labels = np.array(dataset.targets)
+        elif hasattr(dataset, 'targets') and isinstance(dataset.targets, torch.Tensor):
+            labels = dataset.targets.numpy()
+        else:
+            raise AttributeError(f"Dataset {config.DATASET} doesn't have a recognized 'targets' attribute")
+        
+        # Initialize client data indices dictionary
         client_data_indices = {i: [] for i in range(config.NUM_CLIENTS)}
+        
+        # Find indices for each class
         class_indices = [np.where(labels == i)[0] for i in range(config.NUM_CLASSES)]
-        min_samples_per_class = config.MIN_SAMPLES_PER_CLIENT // config.NUM_CLASSES
-
+        
+        # Calculate minimum samples per class
+        min_samples_per_class = max(1, config.MIN_SAMPLES_PER_CLIENT // config.NUM_CLASSES)
+        
+        print(f"\nDistributing data among {config.NUM_CLIENTS} clients...")
+        
+        # Distribute data by class for better balance
         for client_id in range(config.NUM_CLIENTS):
             client_indices = []
+            
             for class_idx in range(config.NUM_CLASSES):
                 available_indices = class_indices[class_idx]
+                
+                # Verify we have enough samples
                 if len(available_indices) < min_samples_per_class:
-                    raise ValueError(f"Insufficient samples in class {class_idx}")
-                selected_indices = np.random.choice(available_indices, size=min_samples_per_class, replace=False)
+                    print(f"Warning: Insufficient samples in class {class_idx}. " 
+                        f"Available: {len(available_indices)}, Required: {min_samples_per_class}")
+                    selected_indices = np.random.choice(available_indices, 
+                                                size=min(len(available_indices), min_samples_per_class), 
+                                                replace=False)
+                else:
+                    selected_indices = np.random.choice(available_indices, 
+                                                size=min_samples_per_class, 
+                                                replace=False)
+                
+                # Add selected indices to client's data
                 client_indices.extend(selected_indices)
+                
+                # Remove selected indices from available pool
                 mask = ~np.isin(class_indices[class_idx], selected_indices)
                 class_indices[class_idx] = class_indices[class_idx][mask]
-            client_data_indices[client_id].extend(client_indices)
+            
+            # Add the selected indices to the client
+            client_data_indices[client_id] = client_indices
         
+        # Distribute remaining indices
         remaining_indices = []
         for lst in class_indices:
             remaining_indices.extend(lst)
-        np.random.shuffle(remaining_indices)
-        remaining_per_client = len(remaining_indices) // config.NUM_CLIENTS
-        for client_id in range(config.NUM_CLIENTS):
-            start_idx = client_id * remaining_per_client
-            end_idx = start_idx + remaining_per_client
-            if client_id == config.NUM_CLIENTS - 1:
-                end_idx = len(remaining_indices)
-            client_data_indices[client_id].extend(remaining_indices[start_idx:end_idx])
         
+        # If we have remaining samples, distribute them
+        if remaining_indices:
+            np.random.shuffle(remaining_indices)
+            remaining_per_client = max(1, len(remaining_indices) // config.NUM_CLIENTS)
+            
+            for client_id in range(config.NUM_CLIENTS):
+                start_idx = client_id * remaining_per_client
+                end_idx = start_idx + remaining_per_client
+                
+                # Ensure the last client gets any leftover samples
+                if client_id == config.NUM_CLIENTS - 1:
+                    end_idx = len(remaining_indices)
+                
+                # Add the additional indices if within bounds
+                if start_idx < len(remaining_indices):
+                    additional_indices = remaining_indices[start_idx:min(end_idx, len(remaining_indices))]
+                    client_data_indices[client_id].extend(additional_indices)
+        
+        # Print distribution statistics
         print("\nData Distribution Statistics:")
         print("-" * 30)
+        
         for client_id, indices in client_data_indices.items():
+            # Verify client got indices
+            if not indices:
+                print(f"ERROR: Client {client_id} received ZERO indices!")
+                continue
+                
             class_dist = np.bincount(labels[indices], minlength=config.NUM_CLASSES)
             print(f"Client {client_id}: {len(indices)} samples")
             print(f"Class distribution: {class_dist}")
+        
+        # Verify minimum requirements
+        min_samples = min(len(indices) for indices in client_data_indices.values())
+        if min_samples < config.MIN_SAMPLES_PER_CLIENT:
+            print(f"Warning: Some clients have fewer than {config.MIN_SAMPLES_PER_CLIENT} samples. " 
+                f"Minimum is {min_samples}.")
+        
         return client_data_indices
 
     def setup_test_data(self):
-        # If using ViT, resize images to 224x224
-        if config.MODEL_TYPE.lower() == "vit":
-            transform_test = transforms.Compose([
-                transforms.Resize(224),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=(0.485, 0.456, 0.406),
-                                     std=(0.229, 0.224, 0.225))
-            ])
+        """
+        Updated setup_test_data method for FederatedServer class to handle multiple datasets
+        """
+        # Choose dataset and transforms based on configuration
+        if config.DATASET.lower() == "cifar10":
+            # If using ViT, resize images to 224x224
+            if config.MODEL_TYPE.lower() == "vit":
+                transform_test = transforms.Compose([
+                    transforms.Resize(224),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=(0.485, 0.456, 0.406),
+                                        std=(0.229, 0.224, 0.225))
+                ])
+            else:
+                transform_test = transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=(0.4914, 0.4822, 0.4465),
+                                        std=(0.2023, 0.1994, 0.2010))
+                ])
+            test_dataset = CIFAR10(root=config.DATA_PATH, train=False, download=True, transform=transform_test)
+        
+        elif config.DATASET.lower() == "fashion_mnist":
+            # If using ViT, resize images to 224x224
+            if config.MODEL_TYPE.lower() == "vit":
+                transform_test = transforms.Compose([
+                    transforms.Resize(224),
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=(0.2860,), std=(0.3530,))
+                ])
+            else:
+                transform_test = transforms.Compose([
+                    transforms.ToTensor(),
+                    transforms.Normalize(mean=(0.2860,), std=(0.3530,))
+                ])
+            test_dataset = FashionMNIST(root=config.DATA_PATH, train=False, download=True, transform=transform_test)
+        
         else:
-            transform_test = transforms.Compose([
-                transforms.ToTensor(),
-                transforms.Normalize(mean=(0.4914, 0.4822, 0.4465),
-                                     std=(0.2023, 0.1994, 0.2010))
-            ])
-        test_dataset = CIFAR10(root=config.DATA_PATH, train=False, download=True, transform=transform_test)
+            raise ValueError(f"Unsupported dataset: {config.DATASET}")
+        
         self.test_loader = DataLoader(test_dataset,
-                                      batch_size=config.TEST_BATCH_SIZE,
-                                      shuffle=False,
-                                      num_workers=0,
-                                      pin_memory=True if self.device != torch.device("cpu") else False)
+                                    batch_size=config.TEST_BATCH_SIZE,
+                                    shuffle=False,
+                                    num_workers=0,
+                                    pin_memory=True if self.device != torch.device("cpu") else False)
+
 
     def setup_clients(self):
         global ATTACK_CONFIGURATION
@@ -145,41 +293,57 @@ class FederatedServer:
         print("\nInitializing Clients:")
         print("-" * 30)
         attack_params = ATTACK_CONFIGURATION
+        
+        # Verify indices for each client
+        for client_id, indices in client_data_indices.items():
+            if not indices:
+                print(f"ERROR: Client {client_id} has no data indices - skipping initialization")
+                continue
+            print(f"Client {client_id}: setting up with {len(indices)} indices")
+        
+        # Setup honest clients if no attack configuration
         if not attack_params:
             for client_id in range(config.NUM_CLIENTS):
+                if client_id not in client_data_indices or not client_data_indices[client_id]:
+                    print(f"ERROR: Skipping client {client_id} setup due to missing data indices")
+                    continue
+                    
                 print(f"Setting up honest client {client_id}")
-                self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
+                try:
+                    self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
+                    print(f"Successfully initialized client {client_id}")
+                except Exception as e:
+                    print(f"Error initializing client {client_id}: {e}")
             return
 
+        # Setup with attack configuration
         malicious_clients = set(attack_params['malicious_client_ids'])
         attack_type = attack_params.get('attack_type', '')
         
         for client_id in range(config.NUM_CLIENTS):
-            if client_id in malicious_clients:
-                if attack_type == 'label_flip':
-                    print(f"Setting up label flipper client {client_id}")
-                    self.clients[client_id] = LabelFlipperClient(client_id, client_data_indices[client_id], attack_params)
-                elif attack_type == 'backdoor':
-                    print(f"Setting up backdoor client {client_id}")
-                    self.clients[client_id] = BackdoorClient(client_id, client_data_indices[client_id], attack_params)
-                elif attack_type == 'model_replacement':
-                    print(f"Setting up model replacement client {client_id}")
-                    self.clients[client_id] = ModelReplacementClient(client_id, client_data_indices[client_id], attack_params)
-                elif attack_type == 'cascade':
-                    print(f"Setting up cascade attack client {client_id}")
-                    self.clients[client_id] = CascadeAttackClient(client_id, client_data_indices[client_id], attack_params)
-                elif attack_type == 'delta':
-                    print(f"Setting up delta attack client {client_id}")
-                    self.clients[client_id] = DeltaAttackClient(client_id, client_data_indices[client_id], attack_params)
-                elif attack_type == 'novel':
-                    print(f"Setting up novel attack client {client_id}")
-                    self.clients[client_id] = NovelAttackClient(client_id, client_data_indices[client_id], attack_params)
+            if client_id not in client_data_indices or not client_data_indices[client_id]:
+                print(f"ERROR: Skipping client {client_id} setup due to missing data indices")
+                continue
+                
+            try:
+                if client_id in malicious_clients:
+                    if attack_type == 'label_flip':
+                        print(f"Setting up label flipper client {client_id}")
+                        self.clients[client_id] = LabelFlipperClient(client_id, client_data_indices[client_id], attack_params)
+                    elif attack_type == 'backdoor':
+                        print(f"Setting up backdoor client {client_id}")
+                        self.clients[client_id] = BackdoorClient(client_id, client_data_indices[client_id], attack_params)
+                    # Include other attack types as needed
+                    else:
+                        print(f"Unknown attack type: {attack_type}. Setting up honest client {client_id}")
+                        self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
                 else:
-                    print(f"Unknown attack type: {attack_type}. Setting up honest client {client_id}")
+                    print(f"Setting up honest client {client_id}")
                     self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
-            else:
-                print(f"Setting up honest client {client_id}")
-                self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
+                    
+                print(f"Successfully initialized client {client_id}")
+            except Exception as e:
+                print(f"Error initializing client {client_id}: {e}")
 
     def setup_logging(self):
         if config.ENABLE_WANDB:
@@ -218,69 +382,202 @@ class FederatedServer:
                 samples_count += len(data)
         return correct / samples_count, total_loss / samples_count
 
+
     def train(self):
         best_accuracy = 0.0
         training_history = []
         print("\nStarting Federated Learning Training")
         print("=" * 50)
+        
+        # Cache initial model structure
+        initial_model_state = OrderedDict({k: v.cpu() for k, v in self.global_model.state_dict().items()})
+        
+        # Properly display first few layers (fixed the odict_items issue)
+        first_few_layers = list(initial_model_state.items())[:3]
+        print(f"Initial model structure: {[(k, v.shape) for k, v in first_few_layers]}...")
+        
         for round_idx in range(config.NUM_ROUNDS):
             print(f"\nRound {round_idx + 1}/{config.NUM_ROUNDS}")
             print("-" * 30)
-            selected_clients = random.sample(list(self.clients.keys()), config.CLIENTS_PER_ROUND)
+            
+            # Select clients for this round
+            selected_clients = random.sample(list(self.clients.keys()), 
+                                            min(config.CLIENTS_PER_ROUND, len(self.clients)))
             print(f"Selected clients for this round: {selected_clients}")
-            local_models, local_losses, sample_counts = [], [], []
+            
+            # Initialize collections for this round
+            local_models = []
+            local_losses = []
+            sample_counts = []
             client_performances = {}
+            
+            # Train each selected client
             for client_id in selected_clients:
                 print(f"\nTraining client {client_id}")
                 client = self.clients[client_id]
+                
+                # Send global model to client
                 global_state = OrderedDict({k: v.cpu() for k, v in self.global_model.state_dict().items()})
-                client.update_local_model(global_state)
-                model_state, loss, samples = client.train_local_model()
-                local_models.append(model_state)
-                local_losses.append(loss)
-                sample_counts.append(samples)
-                client_performances[str(client_id)] = {'loss': loss, 'samples': samples}
-                print(f"Client {client_id} - Loss: {loss:.4f}, Samples: {samples}")
+                
+                try:
+                    # Update client's local model
+                    client.update_local_model(global_state)
+                    
+                    # Train client's model
+                    model_state, loss, samples = client.train_local_model()
+                    
+                    # Verify model structure consistency
+                    first_layer_shapes = {k: v.shape for k, v in list(model_state.items())[:3]}
+                    print(f"Client {client_id} model first layers: {first_layer_shapes}")
+                    
+                    # Add to collections
+                    local_models.append(model_state)
+                    local_losses.append(loss)
+                    sample_counts.append(samples)
+                    client_performances[str(client_id)] = {'loss': loss, 'samples': samples}
+                    
+                    print(f"Client {client_id} - Loss: {loss:.4f}, Samples: {samples}")
+                except Exception as e:
+                    print(f"Error training client {client_id}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    continue
+            
+            # Skip aggregation if no models were collected
+            if not local_models:
+                print("\nNo valid client models to aggregate - skipping round")
+                continue
+            
             print("\nAggregating models...")
-            global_model_state = self.aggregate_models(local_models, sample_counts)
-            self.global_model.load_state_dict(global_model_state)
+            try:
+                # Aggregate client models
+                global_model_state = self.aggregate_models(local_models, sample_counts)
+                
+                # Verify aggregated model structure
+                first_agg_layers = {k: v.shape for k, v in list(global_model_state.items())[:3]}
+                print(f"Aggregated model first layers: {first_agg_layers}")
+                
+                # Load aggregated model
+                self.global_model.load_state_dict(global_model_state)
+            except Exception as e:
+                print(f"Error in model aggregation: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                # Restore original model if aggregation fails
+                self.global_model.load_state_dict(initial_model_state)
+                continue
+            
             print("\nEvaluating global model...")
-            accuracy, test_loss = self.evaluate()
-            round_metrics = {
-                'round': round_idx + 1,
-                'train_loss': np.mean(local_losses),
-                'test_loss': test_loss,
-                'test_accuracy': accuracy,
-                'client_performances': client_performances
-            }
-            training_history.append(round_metrics)
-            print("\nRound Results:")
-            print(f"Average Training Loss: {round_metrics['train_loss']:.4f}")
-            print(f"Test Loss: {test_loss:.4f}")
-            print(f"Test Accuracy: {accuracy:.2%}")
-            if accuracy > best_accuracy:
-                best_accuracy = accuracy
-                print(f"\nNew best accuracy achieved: {best_accuracy:.2%}")
-                model_state = OrderedDict({k: v.cpu() for k, v in self.global_model.state_dict().items()})
-                torch.save(model_state, os.path.join(config.MODEL_PATH, "best_model.pth"))
-            if (round_idx + 1) % config.LOG_INTERVAL == 0:
+            try:
+                # Evaluate global model
+                accuracy, test_loss = self.evaluate()
+                
+                # Record round metrics
+                round_metrics = {
+                    'round': round_idx + 1,
+                    'train_loss': float(np.mean(local_losses)) if local_losses else float('nan'),
+                    'test_loss': float(test_loss),
+                    'test_accuracy': float(accuracy),
+                    'client_performances': client_performances
+                }
+                training_history.append(round_metrics)
+                
+                print("\nRound Results:")
+                print(f"Average Training Loss: {round_metrics['train_loss']:.4f}")
+                print(f"Test Loss: {test_loss:.4f}")
+                print(f"Test Accuracy: {accuracy:.2%}")
+                
+                # Save best model
+                if accuracy > best_accuracy:
+                    best_accuracy = accuracy
+                    print(f"\nNew best accuracy achieved: {best_accuracy:.2%}")
+                    best_model_state = OrderedDict({k: v.cpu() for k, v in self.global_model.state_dict().items()})
+                    os.makedirs(config.MODEL_PATH, exist_ok=True)
+                    torch.save(best_model_state, os.path.join(config.MODEL_PATH, "best_model.pth"))
+                    
+                # Save current history after each round for better resilience
                 with open(self.log_file, 'w') as f:
-                    json.dump(training_history, f)
+                    json.dump(training_history, f, indent=2)
+                    
+            except Exception as e:
+                print(f"Error in evaluation: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                continue
+                
+        print("\nTraining completed!")
         return training_history
-
+    
 def run_experiment(defense_type, attack_config=None):
+    """
+    Run a federated learning experiment with the specified defense and attack configuration.
+    
+    Args:
+        defense_type: The defense mechanism to use
+        attack_config: Optional attack configuration dictionary
+        
+    Returns:
+        Tuple of (training_history, experiment_config)
+    """
     global ATTACK_CONFIGURATION
     os.makedirs(config.DATA_PATH, exist_ok=True)
     os.makedirs(config.MODEL_PATH, exist_ok=True)
+    
+    # Set seeds for reproducibility
     torch.manual_seed(config.SEED)
     np.random.seed(config.SEED)
     random.seed(config.SEED)
+    
+    # Store experiment configuration
     experiment_config = vars(config).copy()
     if attack_config:
         experiment_config.update({'ATTACK_PARAMS': attack_config})
+    
+    # Set up global attack configuration for client initialization
     ATTACK_CONFIGURATION = attack_config
-    server = FederatedServer(defense_type)  # Pass defense type to server
-    training_history = server.train()
+    
+    # Log experiment configuration
+    dataset_name = config.DATASET
+    print(f"\nRunning experiment with {defense_type.upper()} defense on {dataset_name}")
+    print(f"Model: {config.MODEL_TYPE}")
+    if attack_config:
+        attack_type = attack_config.get('attack_type', 'unknown')
+        print(f"Attack: {attack_type}")
+        num_malicious = len(attack_config.get('malicious_client_ids', []))
+        print(f"Number of malicious clients: {num_malicious}")
+    else:
+        print("Attack: None (clean baseline)")
+    
+    # Initialize server with the defense mechanism
+    server = FederatedServer(defense_type)
+    
+    # Train the model
+    try:
+        training_history = server.train()
+        print(f"Training completed successfully with {len(training_history)} rounds")
+    except Exception as e:
+        print(f"Error during training: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        # Return empty history if training failed
+        return [], experiment_config
+    
+    # Save experiment results
+    experiment_dir = f"{defense_type}_{attack_config.get('attack_type', 'clean')}" if attack_config else f"{defense_type}_clean"
+    os.makedirs(f"results/{experiment_dir}", exist_ok=True)
+    
+    # Save final model
+    final_model_path = f"results/{experiment_dir}/final_model.pth"
+    model_state = OrderedDict({k: v.cpu() for k, v in server.global_model.state_dict().items()})
+    torch.save(model_state, final_model_path)
+    
+    # Calculate final stats
+    if training_history:
+        final_acc = training_history[-1].get('test_accuracy', 0) * 100
+        final_loss = training_history[-1].get('test_loss', 0)
+        print(f"Final test accuracy: {final_acc:.2f}%")
+        print(f"Final test loss: {final_loss:.4f}")
+    
     return training_history, experiment_config
 
 def generate_latex_tables(accuracy_data, accuracy_drop_data, output_dir):
@@ -446,14 +743,15 @@ def generate_latex_table_aaf(accuracy_data, output_dir):
 
 def run_custom_experiments(attacks, defenses):
     """
-    Run federated learning experiments for all combinations of specified attacks and defenses.
+    Run federated learning experiments for all combinations of specified attacks and defenses
+    with improved error handling.
     
     Args:
-        attacks: List of tuples (attack_name, attack_config) to test, e.g., [("label_flip", config.LABEL_FLIP_CONFIG)]
-        defenses: List of defense names to test, e.g., ["fedavg", "krum", "median", "norm_clipping", "aaf"]
+        attacks: List of tuples (attack_name, attack_config) to test
+        defenses: List of defense names to test
     
     Returns:
-        Dictionary mapping (defense, attack) combinations to final test accuracies.
+        Dictionary mapping (defense, attack) combinations to final test accuracies
     """
     # Create results directory
     results_dir = "enhanced_results"
@@ -464,6 +762,7 @@ def run_custom_experiments(attacks, defenses):
     
     # Initialize results storage
     accuracy_data = {}
+    success_count = 0
     
     # Create a single evaluator for all experiments
     evaluator = FederatedLearningEvaluator(save_dir=results_dir)
@@ -477,32 +776,8 @@ def run_custom_experiments(attacks, defenses):
         # Update config for this defense
         config.DEFENSE_TYPE = defense
         
-        # Run a clean baseline first
-        print(f"\n{'-'*50}")
-        print(f"Running clean baseline with {defense}")
-        print(f"{'-'*50}")
-        
-        try:
-            # Run clean experiment
-            history, exp_config = run_experiment(defense, None)
-            
-            # Store results with proper naming convention
-            experiment_name = f"{defense}_clean"
-            evaluator.add_experiment_results(experiment_name, history, exp_config)
-            
-            # Extract final accuracy for reporting
-            if history:
-                final_acc = history[-1]['test_accuracy'] * 100
-                accuracy_data[(defense, "clean")] = final_acc
-        except Exception as e:
-            print(f"Error running clean baseline with {defense}: {e}")
-        
-        # Run each attack with this defense
+        # Run all attacks with this defense
         for attack_name, attack_config in attacks:
-            # Skip clean as we already did it
-            if attack_name == "clean":
-                continue
-                
             print(f"\n{'-'*50}")
             print(f"Testing {defense} against {attack_name}")
             print(f"{'-'*50}")
@@ -516,103 +791,133 @@ def run_custom_experiments(attacks, defenses):
                 evaluator.add_experiment_results(experiment_name, history, exp_config)
                 
                 # Extract final accuracy for reporting
-                if history:
+                if history and len(history) > 0:
                     final_acc = history[-1]['test_accuracy'] * 100
                     accuracy_data[(defense, attack_name)] = final_acc
-            except Exception as e:
-                print(f"Error running {attack_name} with {defense}: {e}")
-    
-    print("\nGenerating analysis of results...")
-    try:
-        # Generate evaluator's standard visualizations and reports
-        evaluator.save_all_visualizations()
-        evaluator.generate_summary_report()
-        
-        # Generate comprehensive tables directly from experiment data
-        print("\n=== Comprehensive Results Tables ===")
-        
-        # Get all defense and attack types from experiment names
-        all_defenses = set()
-        all_attacks = set()
-        
-        for name in evaluator.experiments.keys():
-            parts = name.split('_')
-            if len(parts) >= 2:
-                defense = parts[0]
-                attack = '_'.join(parts[1:])
-                all_defenses.add(defense)
-                all_attacks.add(attack)
-        
-        defenses_list = sorted(list(all_defenses))
-        attacks_list = sorted(list(all_attacks))
-        
-        # Create tables
-        import pandas as pd
-        final_accuracy_table = pd.DataFrame(index=defenses_list, columns=attacks_list)
-        best_accuracy_table = pd.DataFrame(index=defenses_list, columns=attacks_list)
-        loss_table = pd.DataFrame(index=defenses_list, columns=attacks_list)
-        
-        # Fill tables with data
-        for name, experiment in evaluator.experiments.items():
-            parts = name.split('_')
-            if len(parts) >= 2:
-                defense = parts[0]
-                attack = '_'.join(parts[1:])
-                
-                results = experiment['results']
-                if results:
-                    final_acc = results[-1]['test_accuracy'] * 100
-                    best_acc = max(r['test_accuracy'] for r in results) * 100
-                    final_loss = results[-1]['test_loss']
-                    
-                    final_accuracy_table.loc[defense, attack] = final_acc
-                    best_accuracy_table.loc[defense, attack] = best_acc
-                    loss_table.loc[defense, attack] = final_loss
-        
-        # Create impact table
-        impact_table = pd.DataFrame(index=defenses_list, columns=attacks_list)
-        for defense in defenses_list:
-            for attack in attacks_list:
-                if attack == "clean":
-                    impact_table.loc[defense, attack] = 0.0
+                    print(f"Experiment completed successfully with final accuracy: {final_acc:.2f}%")
+                    success_count += 1
                 else:
-                    if pd.notna(final_accuracy_table.loc[defense, "clean"]) and pd.notna(final_accuracy_table.loc[defense, attack]):
-                        clean_acc = final_accuracy_table.loc[defense, "clean"]
-                        attack_acc = final_accuracy_table.loc[defense, attack]
-                        impact = attack_acc - clean_acc
-                        impact_table.loc[defense, attack] = impact
-        
-        # Display tables
-        print("\n=== Final Test Accuracy (%) ===")
-        print(final_accuracy_table.fillna("--"))
-        
-        print("\n=== Best Test Accuracy (%) ===")
-        print(best_accuracy_table.fillna("--"))
-        
-        print("\n=== Test Loss ===")
-        print(loss_table.fillna("--"))
-        
-        print("\n=== Attack Impact (percentage points, positive = improved performance) ===")
-        print(impact_table.round(2).fillna("--"))
-        
-        # Calculate stability
-        stability_table = best_accuracy_table - final_accuracy_table
-        print("\n=== Stability (best - final accuracy, lower is better) ===")
-        print(stability_table.round(2).fillna("--"))
-        
-        # Save tables to CSV files
-        tables_dir = os.path.join(results_dir, "tables")
-        os.makedirs(tables_dir, exist_ok=True)
-        
-        final_accuracy_table.to_csv(os.path.join(tables_dir, "final_accuracy.csv"))
-        best_accuracy_table.to_csv(os.path.join(tables_dir, "best_accuracy.csv"))
-        loss_table.to_csv(os.path.join(tables_dir, "test_loss.csv"))
-        impact_table.to_csv(os.path.join(tables_dir, "attack_impact.csv"))
-        
-        print(f"\nTables saved to {tables_dir}")
-        
-    except Exception as e:
-        print(f"Error generating analysis: {e}")
+                    print(f"Warning: Experiment completed but returned no history data")
+                    
+                # Save individual history (ensures we have data even if later experiments fail)
+                individual_history_path = os.path.join(results_dir, f"{experiment_name}_history.json")
+                with open(individual_history_path, 'w') as f:
+                    json.dump(history, f, indent=2)
+                    
+            except Exception as e:
+                print(f"Error running {attack_name} with {defense}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+    
+    print(f"\nExperiments completed: {success_count} successful out of {len(defenses) * len(attacks)} total")
+    
+    # Only try to generate analysis if we have successful experiments
+    if success_count > 0:
+        print("\nGenerating analysis of results...")
+        try:
+            # Generate evaluator's standard visualizations and reports
+            evaluator.save_all_visualizations()
+            evaluator.generate_summary_report()
+            
+            # Generate comprehensive tables directly from experiment data
+            print("\n=== Comprehensive Results Tables ===")
+            
+            # Get all defense and attack types from experiment names
+            all_defenses = set()
+            all_attacks = set()
+            
+            for name in evaluator.experiments.keys():
+                parts = name.split('_')
+                if len(parts) >= 2:
+                    defense = parts[0]
+                    attack = '_'.join(parts[1:])
+                    all_defenses.add(defense)
+                    all_attacks.add(attack)
+            
+            if not all_defenses or not all_attacks:
+                print("No valid experiments found for analysis")
+                return accuracy_data
+                
+            defenses_list = sorted(list(all_defenses))
+            attacks_list = sorted(list(all_attacks))
+            
+            # Create tables
+            import pandas as pd
+            final_accuracy_table = pd.DataFrame(index=defenses_list, columns=attacks_list)
+            best_accuracy_table = pd.DataFrame(index=defenses_list, columns=attacks_list)
+            loss_table = pd.DataFrame(index=defenses_list, columns=attacks_list)
+            
+            # Fill tables with data
+            valid_experiments = 0
+            for name, experiment in evaluator.experiments.items():
+                parts = name.split('_')
+                if len(parts) >= 2:
+                    defense = parts[0]
+                    attack = '_'.join(parts[1:])
+                    
+                    results = experiment.get('results', [])
+                    if results:
+                        final_acc = results[-1]['test_accuracy'] * 100
+                        best_acc = max(r['test_accuracy'] for r in results) * 100
+                        final_loss = results[-1]['test_loss']
+                        
+                        final_accuracy_table.loc[defense, attack] = final_acc
+                        best_accuracy_table.loc[defense, attack] = best_acc
+                        loss_table.loc[defense, attack] = final_loss
+                        valid_experiments += 1
+            
+            if valid_experiments == 0:
+                print("No valid experiment results found for generating tables")
+                return accuracy_data
+                
+            # Create impact table
+            impact_table = pd.DataFrame(index=defenses_list, columns=attacks_list)
+            for defense in defenses_list:
+                for attack in attacks_list:
+                    if attack == "clean":
+                        impact_table.loc[defense, attack] = 0.0
+                    else:
+                        if pd.notna(final_accuracy_table.loc[defense, "clean"]) and pd.notna(final_accuracy_table.loc[defense, attack]):
+                            clean_acc = final_accuracy_table.loc[defense, "clean"]
+                            attack_acc = final_accuracy_table.loc[defense, attack]
+                            impact = attack_acc - clean_acc
+                            impact_table.loc[defense, attack] = impact
+            
+            # Display tables
+            print("\n=== Final Test Accuracy (%) ===")
+            print(final_accuracy_table.fillna("--"))
+            
+            print("\n=== Best Test Accuracy (%) ===")
+            print(best_accuracy_table.fillna("--"))
+            
+            print("\n=== Test Loss ===")
+            print(loss_table.fillna("--"))
+            
+            print("\n=== Attack Impact (percentage points, positive = improved performance) ===")
+            print(impact_table.round(2).fillna("--"))
+            
+            # Calculate stability
+            stability_table = best_accuracy_table - final_accuracy_table
+            print("\n=== Stability (best - final accuracy, lower is better) ===")
+            print(stability_table.round(2).fillna("--"))
+            
+            # Save tables to CSV files
+            tables_dir = os.path.join(results_dir, "tables")
+            os.makedirs(tables_dir, exist_ok=True)
+            
+            final_accuracy_table.to_csv(os.path.join(tables_dir, "final_accuracy.csv"))
+            best_accuracy_table.to_csv(os.path.join(tables_dir, "best_accuracy.csv"))
+            loss_table.to_csv(os.path.join(tables_dir, "test_loss.csv"))
+            impact_table.to_csv(os.path.join(tables_dir, "attack_impact.csv"))
+            
+            print(f"\nTables saved to {tables_dir}")
+            
+        except Exception as e:
+            print(f"Error generating analysis: {e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("\nNo successful experiments to analyze.")
     
     # Restore original defense setting
     config.DEFENSE_TYPE = original_defense

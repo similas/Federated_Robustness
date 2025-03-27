@@ -20,10 +20,9 @@ class FederatedLearningEvaluator:
         self.save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
         self.experiments = {}
-        self.class_names = [
-            'airplane', 'automobile', 'bird', 'cat', 'deer',
-            'dog', 'frog', 'horse', 'ship', 'truck'
-        ]
+        
+        # Use class names from configuration
+        self.class_names = CONFIG.CLASS_NAMES
         
         # Create subdirectories for different types of outputs
         self.plots_dir = os.path.join(save_dir, "plots")
@@ -54,15 +53,36 @@ class FederatedLearningEvaluator:
         
         # Save individual experiment results
         experiment_path = os.path.join(self.save_dir, f"{name}_{timestamp}.json")
-        with open(experiment_path, 'w') as f:
+        try:
             # Create a serializable version of the results
             serializable_results = self._make_serializable(results)
             serializable_config = self._make_serializable(config)
             
-            json.dump({
-                'results': serializable_results,
-                'config': serializable_config
-            }, f, indent=4)
+            with open(experiment_path, 'w') as f:
+                json.dump({
+                    'results': serializable_results,
+                    'config': serializable_config
+                }, f, indent=4)
+        except Exception as e:
+            print(f"Warning: Could not save experiment {name} to JSON: {str(e)}")
+            # Try a more aggressive approach to make it serializable
+            try:
+                simplified_results = []
+                for round_data in results:
+                    simplified_round = {}
+                    for key, value in round_data.items():
+                        if key != 'client_performances':  # Skip complex nested structures
+                            simplified_round[key] = self._make_serializable(value)
+                    simplified_results.append(simplified_round)
+                
+                with open(experiment_path, 'w') as f:
+                    json.dump({
+                        'results': simplified_results,
+                        'config': self._make_serializable(config)
+                    }, f, indent=4)
+                print(f"Saved simplified results for {name}")
+            except Exception as e2:
+                print(f"Error saving even simplified results: {str(e2)}")
         
         print(f"Added experiment: {name}")
         
@@ -91,13 +111,22 @@ class FederatedLearningEvaluator:
             save: Whether to save the plot to disk
             show: Whether to display the plot
         """
+        if not self.experiments:
+            print("No experiments found to plot accuracy comparison.")
+            return
+            
         plt.figure(figsize=(12, 7))
         plt.grid(True, linestyle='--', alpha=0.7)
         
         colors = plt.cm.tab10.colors
         markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h']
         
+        legend_added = False
         for i, (name, experiment) in enumerate(self.experiments.items()):
+            if 'results' not in experiment or not experiment['results']:
+                print(f"Experiment '{name}' has no results to plot.")
+                continue
+                
             color = colors[i % len(colors)]
             marker = markers[i % len(markers)]
             
@@ -106,11 +135,20 @@ class FederatedLearningEvaluator:
             
             plt.plot(rounds, accuracies, label=name, marker=marker, 
                      color=color, linewidth=2, markersize=8, alpha=0.8)
+            legend_added = True
 
+        if not legend_added:
+            plt.text(0.5, 0.5, "No data available to plot", 
+                     horizontalalignment='center', verticalalignment='center',
+                     transform=plt.gca().transAxes, fontsize=14)
+        
         plt.xlabel('Communication Round', fontsize=14)
         plt.ylabel('Test Accuracy (%)', fontsize=14)
         plt.title('Test Accuracy Comparison Across Experiments', fontsize=16)
-        plt.legend(fontsize=12, frameon=True, facecolor='white', edgecolor='gray')
+        
+        if legend_added:
+            plt.legend(fontsize=12, frameon=True, facecolor='white', edgecolor='gray')
+        
         plt.xticks(fontsize=12)
         plt.yticks(fontsize=12)
         plt.tight_layout()
@@ -132,13 +170,22 @@ class FederatedLearningEvaluator:
             save: Whether to save the plot to disk
             show: Whether to display the plot
         """
+        if not self.experiments:
+            print("No experiments found to plot loss comparison.")
+            return
+            
         plt.figure(figsize=(12, 7))
         plt.grid(True, linestyle='--', alpha=0.7)
         
         colors = plt.cm.tab10.colors
         markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', '*', 'h']
         
+        legend_added = False
         for i, (name, experiment) in enumerate(self.experiments.items()):
+            if 'results' not in experiment or not experiment['results']:
+                print(f"Experiment '{name}' has no results to plot.")
+                continue
+                
             color = colors[i % len(colors)]
             marker = markers[i % len(markers)]
             
@@ -147,11 +194,20 @@ class FederatedLearningEvaluator:
             
             plt.plot(rounds, losses, label=name, marker=marker, 
                      color=color, linewidth=2, markersize=8, alpha=0.8)
+            legend_added = True
 
+        if not legend_added:
+            plt.text(0.5, 0.5, "No data available to plot", 
+                     horizontalalignment='center', verticalalignment='center',
+                     transform=plt.gca().transAxes, fontsize=14)
+        
         plt.xlabel('Communication Round', fontsize=14)
         plt.ylabel('Test Loss', fontsize=14)
         plt.title('Test Loss Comparison Across Experiments', fontsize=16)
-        plt.legend(fontsize=12, frameon=True, facecolor='white', edgecolor='gray')
+        
+        if legend_added:
+            plt.legend(fontsize=12, frameon=True, facecolor='white', edgecolor='gray')
+        
         plt.xticks(fontsize=12)
         plt.yticks(fontsize=12)
         plt.tight_layout()
@@ -177,6 +233,10 @@ class FederatedLearningEvaluator:
         if baseline_experiment not in self.experiments:
             print(f"Baseline experiment '{baseline_experiment}' not found.")
             return
+        
+        if 'results' not in self.experiments[baseline_experiment] or not self.experiments[baseline_experiment]['results']:
+            print(f"Baseline experiment '{baseline_experiment}' has no results.")
+            return
             
         plt.figure(figsize=(12, 7))
         plt.grid(True, linestyle='--', alpha=0.7)
@@ -192,11 +252,18 @@ class FederatedLearningEvaluator:
         for name, experiment in self.experiments.items():
             if name == baseline_experiment:
                 continue
+            
+            if 'results' not in experiment or not experiment['results']:
+                continue
                 
             final_accuracy = experiment['results'][-1].get('test_accuracy', 0) * 100
             baseline_final = baseline_accuracies[-1]
             degradation = baseline_final - final_accuracy
             sorted_experiments.append((name, experiment, degradation))
+            
+        if not sorted_experiments:
+            print("No valid experiments to compare with baseline.")
+            return
             
         sorted_experiments.sort(key=lambda x: x[2], reverse=True)
         
@@ -246,6 +313,9 @@ class FederatedLearningEvaluator:
         defense_results = {}
         
         for name, experiment in self.experiments.items():
+            if 'results' not in experiment or not experiment['results']:
+                continue
+                
             # Parse experiment name to extract defense and attack
             parts = name.split('_')
             if len(parts) >= 2:
@@ -310,7 +380,7 @@ class FederatedLearningEvaluator:
             show: Whether to display the plots
         """
         for name, experiment in self.experiments.items():
-            if 'config' not in experiment or not experiment['config']:
+            if 'config' not in experiment or not experiment['config'] or 'results' not in experiment or not experiment['results']:
                 continue
                 
             attack_params = experiment['config'].get('ATTACK_PARAMS', None)
@@ -327,44 +397,54 @@ class FederatedLearningEvaluator:
             for round_data in experiment['results']:
                 if 'client_performances' in round_data:
                     for client_id, perf in round_data['client_performances'].items():
-                        if int(client_id) in malicious_clients:
-                            malicious_losses.append(perf.get('loss', 0))
-                        else:
-                            honest_losses.append(perf.get('loss', 0))
+                        try:
+                            client_id_int = int(client_id)
+                            if client_id_int in malicious_clients:
+                                malicious_losses.append(perf.get('loss', 0))
+                            else:
+                                honest_losses.append(perf.get('loss', 0))
+                        except (ValueError, TypeError):
+                            # Skip if client_id can't be converted to int
+                            continue
             
             if not honest_losses or not malicious_losses:
+                print(f"Insufficient data for experiment '{name}' to plot loss distributions")
                 continue
                 
             plt.figure(figsize=(12, 6))
             sns.set_style("whitegrid")
             
-            # Plot histograms
-            plt.subplot(1, 2, 1)
-            plt.hist(honest_losses, alpha=0.7, label='Honest Clients', bins=20, color='blue')
-            plt.hist(malicious_losses, alpha=0.7, label='Malicious Clients', bins=20, color='red')
-            plt.xlabel('Loss', fontsize=12)
-            plt.ylabel('Frequency', fontsize=12)
-            plt.title(f'Loss Distribution - {name}', fontsize=14)
-            plt.legend(fontsize=10)
-            
-            # Plot KDE with updated parameter (fill instead of shade)
-            plt.subplot(1, 2, 2)
-            sns.kdeplot(honest_losses, label='Honest Clients', fill=True, color='blue')
-            sns.kdeplot(malicious_losses, label='Malicious Clients', fill=True, color='red')
-            plt.xlabel('Loss', fontsize=12)
-            plt.ylabel('Density', fontsize=12)
-            plt.title('Kernel Density Estimate', fontsize=14)
-            plt.legend(fontsize=10)
-            
-            plt.tight_layout()
-            
-            if save:
-                plt.savefig(os.path.join(self.plots_dir, f'loss_distribution_{name}.png'), dpi=300, bbox_inches='tight')
-                plt.savefig(os.path.join(self.plots_dir, f'loss_distribution_{name}.pdf'), bbox_inches='tight')
-            
-            if show:
-                plt.show()
-            else:
+            try:
+                # Plot histograms
+                plt.subplot(1, 2, 1)
+                plt.hist(honest_losses, alpha=0.7, label='Honest Clients', bins=20, color='blue')
+                plt.hist(malicious_losses, alpha=0.7, label='Malicious Clients', bins=20, color='red')
+                plt.xlabel('Loss', fontsize=12)
+                plt.ylabel('Frequency', fontsize=12)
+                plt.title(f'Loss Distribution - {name}', fontsize=14)
+                plt.legend(fontsize=10)
+                
+                # Plot KDE with updated parameter (fill instead of shade)
+                plt.subplot(1, 2, 2)
+                sns.kdeplot(honest_losses, label='Honest Clients', fill=True, color='blue')
+                sns.kdeplot(malicious_losses, label='Malicious Clients', fill=True, color='red')
+                plt.xlabel('Loss', fontsize=12)
+                plt.ylabel('Density', fontsize=12)
+                plt.title('Kernel Density Estimate', fontsize=14)
+                plt.legend(fontsize=10)
+                
+                plt.tight_layout()
+                
+                if save:
+                    plt.savefig(os.path.join(self.plots_dir, f'loss_distribution_{name}.png'), dpi=300, bbox_inches='tight')
+                    plt.savefig(os.path.join(self.plots_dir, f'loss_distribution_{name}.pdf'), bbox_inches='tight')
+                
+                if show:
+                    plt.show()
+                else:
+                    plt.close()
+            except Exception as e:
+                print(f"Error plotting loss distribution for experiment '{name}': {str(e)}")
                 plt.close()
 
 
@@ -378,13 +458,16 @@ class FederatedLearningEvaluator:
         Returns:
             Dictionary of impact metrics for each attack
         """
+        impact_metrics = {}
+        
         if baseline_experiment not in self.experiments:
+            print(f"Warning: No '{baseline_experiment}' experiment found for comparison")
             return {"error": f"No {baseline_experiment} experiment found for comparison"}
             
-        impact_metrics = {}
-        clean_results = self.experiments[baseline_experiment]['results']
+        clean_results = self.experiments[baseline_experiment].get('results', [])
         
         if not clean_results:
+            print(f"Warning: No results in '{baseline_experiment}' experiment")
             return {"error": f"No results in {baseline_experiment} experiment"}
             
         clean_final_acc = clean_results[-1].get('test_accuracy', 0)
@@ -400,6 +483,11 @@ class FederatedLearningEvaluator:
             if name == baseline_experiment:
                 continue
                 
+            results = experiment.get('results', [])
+            if not results:
+                print(f"Warning: No results in '{name}' experiment")
+                continue
+                
             # Extract defense and attack names
             name_parts = name.split('_')
             if len(name_parts) < 2:
@@ -409,10 +497,6 @@ class FederatedLearningEvaluator:
             defense = name_parts[0]
             attack = '_'.join(name_parts[1:])
             
-            results = experiment['results']
-            if not results:
-                continue
-                
             final_acc = results[-1].get('test_accuracy', 0)
             best_acc = max(r.get('test_accuracy', 0) for r in results)
             
@@ -445,11 +529,12 @@ class FederatedLearningEvaluator:
                 'best_accuracy': float(best_acc)
             }
         
-        # Save the metrics
-        metrics_path = os.path.join(self.metrics_dir, "attack_impact_metrics.json")
-        with open(metrics_path, 'w') as f:
-            json.dump(impact_metrics, f, indent=4)
-            
+        # Save the metrics only if we have data
+        if impact_metrics:
+            metrics_path = os.path.join(self.metrics_dir, "attack_impact_metrics.json")
+            with open(metrics_path, 'w') as f:
+                json.dump(impact_metrics, f, indent=4)
+                
         self.comparison_metrics = impact_metrics
         return impact_metrics
 
@@ -468,6 +553,9 @@ class FederatedLearningEvaluator:
         if isinstance(metrics, dict) and "error" in metrics:
             return {"error": metrics["error"]}
             
+        if not metrics:
+            return {"error": "No metrics data available to generate tables"}
+            
         # Generate attack vs defense tables
         tables = {}
         
@@ -477,6 +565,9 @@ class FederatedLearningEvaluator:
         for attack_metrics in metrics.values():
             defense_names.update(attack_metrics.keys())
         defense_names = sorted(defense_names)
+        
+        if not attack_names or not defense_names:
+            return {"error": "No valid attack or defense data found"}
         
         # LaTeX table for final accuracy
         accuracy_table = "\\begin{table}[htbp]\n"
@@ -574,14 +665,25 @@ class FederatedLearningEvaluator:
         stats = {}
         
         for name, experiment in self.experiments.items():
+            if 'results' not in experiment or not experiment['results']:
+                continue
+                
             client_losses = defaultdict(list)
             client_samples = defaultdict(list)
             
             for round_data in experiment['results']:
                 if 'client_performances' in round_data:
                     for client_id, perf in round_data['client_performances'].items():
-                        client_losses[client_id].append(perf.get('loss', 0))
-                        client_samples[client_id].append(perf.get('samples', 0))
+                        try:
+                            loss = perf.get('loss', 0)
+                            samples = perf.get('samples', 0)
+                            # Validate data
+                            if not isinstance(loss, (int, float)) or not isinstance(samples, (int, float)):
+                                continue
+                            client_losses[client_id].append(loss)
+                            client_samples[client_id].append(samples)
+                        except:
+                            continue
             
             if not client_losses:
                 continue
@@ -598,16 +700,28 @@ class FederatedLearningEvaluator:
             # Compute statistics
             client_stats = {}
             for client_id, losses in client_losses.items():
-                is_malicious = int(client_id) in malicious_clients
-                client_stats[client_id] = {
-                    'is_malicious': is_malicious,
-                    'mean_loss': float(np.mean(losses)),
-                    'std_loss': float(np.std(losses)),
-                    'min_loss': float(np.min(losses)),
-                    'max_loss': float(np.max(losses)),
-                    'loss_trend': float(losses[-1] - losses[0]) if len(losses) > 1 else 0,
-                    'mean_samples': float(np.mean(client_samples[client_id])) if client_id in client_samples else 0
-                }
+                try:
+                    client_id_int = int(client_id)
+                    is_malicious = client_id_int in malicious_clients
+                    
+                    if not losses:
+                        continue
+                        
+                    client_stats[client_id] = {
+                        'is_malicious': is_malicious,
+                        'mean_loss': float(np.mean(losses)),
+                        'std_loss': float(np.std(losses)),
+                        'min_loss': float(np.min(losses)),
+                        'max_loss': float(np.max(losses)),
+                        'loss_trend': float(losses[-1] - losses[0]) if len(losses) > 1 else 0,
+                        'mean_samples': float(np.mean(client_samples[client_id])) if client_id in client_samples and client_samples[client_id] else 0
+                    }
+                except (ValueError, TypeError, IndexError):
+                    continue
+                
+            # Skip if no valid client stats
+            if not client_stats:
+                continue
                 
             # Aggregate statistics by client type
             honest_losses = [stats['mean_loss'] for cid, stats in client_stats.items() 
@@ -620,6 +734,10 @@ class FederatedLearningEvaluator:
             malicious_samples = [stats['mean_samples'] for cid, stats in client_stats.items() 
                                if stats['is_malicious']]
             
+            # Skip if no valid categorization 
+            if not honest_losses and not malicious_losses:
+                continue
+                
             # Compute aggregate statistics
             aggregated_stats = {
                 'client_count': len(client_stats),
@@ -638,145 +756,159 @@ class FederatedLearningEvaluator:
             
             stats[name] = aggregated_stats
         
-        # Save statistics
-        with open(os.path.join(self.metrics_dir, "client_performance_statistics.json"), 'w') as f:
-            json.dump(stats, f, indent=4)
+        # Save statistics if we have data
+        if stats:
+            with open(os.path.join(self.metrics_dir, "client_performance_statistics.json"), 'w') as f:
+                json.dump(stats, f, indent=4)
             
         return stats
 
     def plot_client_statistics(self, save=True, show=False):
         """
-        Create plots visualizing client statistics.
-        
-        Args:
-            save: Whether to save the plots to disk
-            show: Whether to display the plots
+        Create plots visualizing client statistics with better error handling.
         """
-        stats = self.generate_client_performance_statistics()
-        
-        # Plot 1: Loss comparison between honest and malicious clients
-        plt.figure(figsize=(14, 8))
-        
-        experiment_names = []
-        honest_losses = []
-        malicious_losses = []
-        
-        for name, experiment_stats in stats.items():
-            if experiment_stats['honest_count'] > 0 and experiment_stats['malicious_count'] > 0:
-                experiment_names.append(name)
-                honest_losses.append(experiment_stats['honest_mean_loss'])
-                malicious_losses.append(experiment_stats['malicious_mean_loss'])
-        
-        if not experiment_names:
-            print("No experiments with both honest and malicious clients found.")
-            return
+        try:
+            stats = self.generate_client_performance_statistics()
             
-        x = np.arange(len(experiment_names))
-        width = 0.35
-        
-        plt.subplot(2, 1, 1)
-        plt.bar(x - width/2, honest_losses, width, label='Honest Clients', color='blue', alpha=0.7)
-        plt.bar(x + width/2, malicious_losses, width, label='Malicious Clients', color='red', alpha=0.7)
-        
-        plt.xlabel('Experiment', fontsize=12)
-        plt.ylabel('Mean Loss', fontsize=12)
-        plt.title('Loss Comparison: Honest vs Malicious Clients', fontsize=14)
-        plt.xticks(x, experiment_names, rotation=45, ha='right')
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.7)
-        
-        # Plot 2: Sample count comparison
-        honest_samples = []
-        malicious_samples = []
-        
-        for name in experiment_names:
-            honest_samples.append(stats[name]['honest_mean_samples'])
-            malicious_samples.append(stats[name]['malicious_mean_samples'])
-        
-        plt.subplot(2, 1, 2)
-        plt.bar(x - width/2, honest_samples, width, label='Honest Clients', color='blue', alpha=0.7)
-        plt.bar(x + width/2, malicious_samples, width, label='Malicious Clients', color='red', alpha=0.7)
-        
-        plt.xlabel('Experiment', fontsize=12)
-        plt.ylabel('Mean Samples', fontsize=12)
-        plt.title('Sample Count Comparison: Honest vs Malicious Clients', fontsize=14)
-        plt.xticks(x, experiment_names, rotation=45, ha='right')
-        plt.legend()
-        plt.grid(True, linestyle='--', alpha=0.7)
-        
-        plt.tight_layout()
-        
-        if save:
-            plt.savefig(os.path.join(self.plots_dir, 'client_comparison.png'), dpi=300, bbox_inches='tight')
-            plt.savefig(os.path.join(self.plots_dir, 'client_comparison.pdf'), bbox_inches='tight')
-        
-        if show:
-            plt.show()
-        else:
-            plt.close()
-        
-        # Plot individual client statistics for each experiment
-        for name, experiment_stats in stats.items():
-            if 'per_client' not in experiment_stats or not experiment_stats['per_client']:
-                continue
+            if not stats:
+                print("No client statistics available to plot.")
+                return
                 
-            plt.figure(figsize=(14, 10))
+            # Plot 1: Loss comparison between honest and malicious clients
+            plt.figure(figsize=(14, 8))
             
-            client_ids = []
-            client_losses = []
-            client_samples = []
-            colors = []
+            experiment_names = []
+            honest_losses = []
+            malicious_losses = []
             
-            for client_id, client_stats in experiment_stats['per_client'].items():
-                client_ids.append(client_id)
-                client_losses.append(client_stats['mean_loss'])
-                client_samples.append(client_stats['mean_samples'])
-                colors.append('red' if client_stats['is_malicious'] else 'blue')
+            for name, experiment_stats in stats.items():
+                if experiment_stats.get('honest_count', 0) > 0 and experiment_stats.get('malicious_count', 0) > 0:
+                    experiment_names.append(name)
+                    honest_losses.append(experiment_stats['honest_mean_loss'])
+                    malicious_losses.append(experiment_stats['malicious_mean_loss'])
             
-            # Sort by client ID for better visualization
-            sorted_indices = [i for i, _ in sorted(enumerate(client_ids), key=lambda x: int(x[1]))]
-            client_ids = [client_ids[i] for i in sorted_indices]
-            client_losses = [client_losses[i] for i in sorted_indices]
-            client_samples = [client_samples[i] for i in sorted_indices]
-            colors = [colors[i] for i in sorted_indices]
+            if not experiment_names:
+                print("No experiments with both honest and malicious clients found.")
+                return
+                
+            x = np.arange(len(experiment_names))
+            width = 0.35
             
-            # Plot client losses
             plt.subplot(2, 1, 1)
-            bars = plt.bar(client_ids, client_losses, color=colors, alpha=0.7)
+            plt.bar(x - width/2, honest_losses, width, label='Honest Clients', color='blue', alpha=0.7)
+            plt.bar(x + width/2, malicious_losses, width, label='Malicious Clients', color='red', alpha=0.7)
             
-            # Add a legend
-            from matplotlib.patches import Patch
-            legend_elements = [
-                Patch(facecolor='blue', alpha=0.7, label='Honest'),
-                Patch(facecolor='red', alpha=0.7, label='Malicious')
-            ]
-            plt.legend(handles=legend_elements)
-            
-            plt.xlabel('Client ID', fontsize=12)
+            plt.xlabel('Experiment', fontsize=12)
             plt.ylabel('Mean Loss', fontsize=12)
-            plt.title(f'Client Losses - {name}', fontsize=14)
+            plt.title('Loss Comparison: Honest vs Malicious Clients', fontsize=14)
+            plt.xticks(x, experiment_names, rotation=45, ha='right')
+            plt.legend()
             plt.grid(True, linestyle='--', alpha=0.7)
             
-            # Plot client sample counts
-            plt.subplot(2, 1, 2)
-            plt.bar(client_ids, client_samples, color=colors, alpha=0.7)
-            plt.legend(handles=legend_elements)
+            # Plot 2: Sample count comparison
+            honest_samples = []
+            malicious_samples = []
             
-            plt.xlabel('Client ID', fontsize=12)
+            for name in experiment_names:
+                honest_samples.append(stats[name]['honest_mean_samples'])
+                malicious_samples.append(stats[name]['malicious_mean_samples'])
+            
+            plt.subplot(2, 1, 2)
+            plt.bar(x - width/2, honest_samples, width, label='Honest Clients', color='blue', alpha=0.7)
+            plt.bar(x + width/2, malicious_samples, width, label='Malicious Clients', color='red', alpha=0.7)
+            
+            plt.xlabel('Experiment', fontsize=12)
             plt.ylabel('Mean Samples', fontsize=12)
-            plt.title('Client Sample Counts', fontsize=14)
+            plt.title('Sample Count Comparison: Honest vs Malicious Clients', fontsize=14)
+            plt.xticks(x, experiment_names, rotation=45, ha='right')
+            plt.legend()
             plt.grid(True, linestyle='--', alpha=0.7)
             
             plt.tight_layout()
             
             if save:
-                plt.savefig(os.path.join(self.plots_dir, f'client_stats_{name}.png'), dpi=300, bbox_inches='tight')
-                plt.savefig(os.path.join(self.plots_dir, f'client_stats_{name}.pdf'), bbox_inches='tight')
+                plt.savefig(os.path.join(self.plots_dir, 'client_comparison.png'), dpi=300, bbox_inches='tight')
+                plt.savefig(os.path.join(self.plots_dir, 'client_comparison.pdf'), bbox_inches='tight')
             
             if show:
                 plt.show()
             else:
                 plt.close()
+            
+            # Plot individual client statistics for each experiment
+            for name, experiment_stats in stats.items():
+                if 'per_client' not in experiment_stats or not experiment_stats['per_client']:
+                    continue
+                    
+                plt.figure(figsize=(14, 10))
+                
+                client_ids = []
+                client_losses = []
+                client_samples = []
+                colors = []
+                
+                for client_id, client_stats in experiment_stats['per_client'].items():
+                    client_ids.append(client_id)
+                    client_losses.append(client_stats['mean_loss'])
+                    client_samples.append(client_stats['mean_samples'])
+                    colors.append('red' if client_stats['is_malicious'] else 'blue')
+                
+                if not client_ids:
+                    continue
+                
+                try:
+                    # Sort by client ID for better visualization
+                    sorted_indices = [i for i, _ in sorted(enumerate(client_ids), key=lambda x: int(x[1]))]
+                    client_ids = [client_ids[i] for i in sorted_indices]
+                    client_losses = [client_losses[i] for i in sorted_indices]
+                    client_samples = [client_samples[i] for i in sorted_indices]
+                    colors = [colors[i] for i in sorted_indices]
+                except (ValueError, TypeError):
+                    # If sorting fails, continue with unsorted data
+                    pass
+                
+                # Plot client losses
+                plt.subplot(2, 1, 1)
+                bars = plt.bar(client_ids, client_losses, color=colors, alpha=0.7)
+                
+                # Add a legend
+                from matplotlib.patches import Patch
+                legend_elements = [
+                    Patch(facecolor='blue', alpha=0.7, label='Honest'),
+                    Patch(facecolor='red', alpha=0.7, label='Malicious')
+                ]
+                plt.legend(handles=legend_elements)
+                
+                plt.xlabel('Client ID', fontsize=12)
+                plt.ylabel('Mean Loss', fontsize=12)
+                plt.title(f'Client Losses - {name}', fontsize=14)
+                plt.grid(True, linestyle='--', alpha=0.7)
+                
+                # Plot client sample counts
+                plt.subplot(2, 1, 2)
+                plt.bar(client_ids, client_samples, color=colors, alpha=0.7)
+                plt.legend(handles=legend_elements)
+                
+                plt.xlabel('Client ID', fontsize=12)
+                plt.ylabel('Mean Samples', fontsize=12)
+                plt.title('Client Sample Counts', fontsize=14)
+                plt.grid(True, linestyle='--', alpha=0.7)
+                
+                plt.tight_layout()
+                
+                if save:
+                    plt.savefig(os.path.join(self.plots_dir, f'client_stats_{name}.png'), dpi=300, bbox_inches='tight')
+                    plt.savefig(os.path.join(self.plots_dir, f'client_stats_{name}.pdf'), bbox_inches='tight')
+                
+                if show:
+                    plt.show()
+                else:
+                    plt.close()
+        
+        except Exception as e:
+            print(f"Error generating client statistics plot: {str(e)}")
+            import traceback
+            traceback.print_exc()
 
     def plot_convergence_analysis(self, save=True, show=False):
         """
@@ -786,104 +918,116 @@ class FederatedLearningEvaluator:
             save: Whether to save the plots to disk
             show: Whether to display the plots
         """
-        # Extract convergence metrics
-        convergence_data = {}
-        
-        for name, experiment in self.experiments.items():
-            results = experiment['results']
-            if not results:
-                continue
+        try:
+            # Extract convergence metrics
+            convergence_data = {}
+            
+            for name, experiment in self.experiments.items():
+                if 'results' not in experiment or not experiment['results']:
+                    continue
+                    
+                results = experiment['results']
                 
-            # Calculate best accuracy and convergence round
-            accuracies = [r.get('test_accuracy', 0) for r in results]
-            best_accuracy = max(accuracies)
-            convergence_threshold = 0.95 * best_accuracy
+                # Calculate best accuracy and convergence round
+                accuracies = [r.get('test_accuracy', 0) for r in results]
+                best_accuracy = max(accuracies)
+                convergence_threshold = 0.95 * best_accuracy
+                
+                convergence_round = next((i+1 for i, acc in enumerate(accuracies) 
+                                    if acc >= convergence_threshold), len(accuracies))
+                
+                convergence_data[name] = {
+                    'best_accuracy': best_accuracy,
+                    'final_accuracy': accuracies[-1],
+                    'convergence_round': convergence_round,
+                    'stability': np.std(accuracies[convergence_round-1:]) if convergence_round < len(accuracies) else 0
+                }
             
-            convergence_round = next((i+1 for i, acc in enumerate(accuracies) 
-                                if acc >= convergence_threshold), len(accuracies))
+            if not convergence_data:
+                print("No convergence data available to plot.")
+                return
+                
+            # Plot 1: Convergence rounds comparison
+            plt.figure(figsize=(14, 10))
             
-            convergence_data[name] = {
-                'best_accuracy': best_accuracy,
-                'final_accuracy': accuracies[-1],
-                'convergence_round': convergence_round,
-                'stability': np.std(accuracies[convergence_round-1:]) if convergence_round < len(accuracies) else 0
-            }
-        
-        # Plot 1: Convergence rounds comparison
-        plt.figure(figsize=(14, 10))
-        
-        # Sort experiments by convergence round
-        sorted_experiments = sorted(convergence_data.items(), key=lambda x: x[1]['convergence_round'])
-        names = [item[0] for item in sorted_experiments]
-        convergence_rounds = [item[1]['convergence_round'] for item in sorted_experiments]
-        best_accuracies = [item[1]['best_accuracy'] * 100 for item in sorted_experiments]
-        
-        # Create bar chart with color gradient based on best accuracy
-        plt.subplot(2, 1, 1)
-        bars = plt.bar(names, convergence_rounds, alpha=0.7)
-        
-        # Color bars based on best accuracy
-        cmap = plt.cm.viridis
-        for i, bar in enumerate(bars):
-            bar.set_color(cmap(best_accuracies[i]/100))
-        
-        plt.xlabel('Experiment', fontsize=12)
-        plt.ylabel('Convergence Round', fontsize=12)
-        plt.title('Rounds to Convergence (95% of Best Accuracy)', fontsize=14)
-        plt.xticks(rotation=45, ha='right')
-        plt.grid(True, linestyle='--', alpha=0.7)
-        
-        # Add a colorbar with explicit axes
-        sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(min(best_accuracies), max(best_accuracies)))
-        sm.set_array([])
-        plt.tight_layout()  # Apply tight layout before adding colorbar
-        plt.subplots_adjust(right=0.85)  # Make room for colorbar
-        cax = plt.gcf().add_axes([0.88, 0.525, 0.02, 0.35])  # Define colorbar axes
-        cbar = plt.colorbar(sm, cax=cax)
-        cbar.set_label('Best Accuracy (%)')
-        
-        # Plot 2: Stability after convergence
-        stabilities = [item[1]['stability'] * 100 for item in sorted_experiments]
-        
-        plt.subplot(2, 1, 2)
-        bars = plt.bar(names, stabilities, alpha=0.7)
-        
-        # Color bars based on stability (lower is better)
-        cmap_stability = plt.cm.RdYlGn_r
-        max_std = max(stabilities) if stabilities else 1.0
-        for i, bar in enumerate(bars):
-            bar.set_color(cmap_stability(stabilities[i]/max_std if max_std > 0 else 0))
-        
-        plt.xlabel('Experiment', fontsize=12)
-        plt.ylabel('Standard Deviation (%)', fontsize=12)
-        plt.title('Stability After Convergence (Lower is Better)', fontsize=14)
-        plt.xticks(rotation=45, ha='right')
-        plt.grid(True, linestyle='--', alpha=0.7)
-        
-        plt.tight_layout()
-        
-        # Add second colorbar
-        sm2 = plt.cm.ScalarMappable(cmap=cmap_stability, norm=plt.Normalize(0, max_std))
-        sm2.set_array([])
-        plt.subplots_adjust(right=0.85)  # Make room for colorbar
-        cax2 = plt.gcf().add_axes([0.88, 0.1, 0.02, 0.35])  # Define colorbar axes
-        cbar2 = plt.colorbar(sm2, cax=cax2)
-        cbar2.set_label('Std Dev (%) - Lower is better')
-        
-        if save:
-            plt.savefig(os.path.join(self.plots_dir, 'convergence_analysis.png'), dpi=300, bbox_inches='tight')
-            plt.savefig(os.path.join(self.plots_dir, 'convergence_analysis.pdf'), bbox_inches='tight')
-        
-        if show:
-            plt.show()
-        else:
-            plt.close()
-        
-        # Save convergence data
-        with open(os.path.join(self.metrics_dir, "convergence_metrics.json"), 'w') as f:
-            json.dump(convergence_data, f, indent=4)
+            # Sort experiments by convergence round
+            sorted_experiments = sorted(convergence_data.items(), key=lambda x: x[1]['convergence_round'])
+            names = [item[0] for item in sorted_experiments]
+            convergence_rounds = [item[1]['convergence_round'] for item in sorted_experiments]
+            best_accuracies = [item[1]['best_accuracy'] * 100 for item in sorted_experiments]
             
-        return convergence_data
+            # Create bar chart with color gradient based on best accuracy
+            plt.subplot(2, 1, 1)
+            bars = plt.bar(names, convergence_rounds, alpha=0.7)
+            
+            # Color bars based on best accuracy
+            cmap = plt.cm.viridis
+            for i, bar in enumerate(bars):
+                bar.set_color(cmap(best_accuracies[i]/100))
+            
+            plt.xlabel('Experiment', fontsize=12)
+            plt.ylabel('Convergence Round', fontsize=12)
+            plt.title('Rounds to Convergence (95% of Best Accuracy)', fontsize=14)
+            plt.xticks(rotation=45, ha='right')
+            plt.grid(True, linestyle='--', alpha=0.7)
+            
+            # Add a colorbar with explicit axes
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(min(best_accuracies), max(best_accuracies)))
+            sm.set_array([])
+            plt.tight_layout()  # Apply tight layout before adding colorbar
+            plt.subplots_adjust(right=0.85)  # Make room for colorbar
+            cax = plt.gcf().add_axes([0.88, 0.525, 0.02, 0.35])  # Define colorbar axes
+            cbar = plt.colorbar(sm, cax=cax)
+            cbar.set_label('Best Accuracy (%)')
+            
+            # Plot 2: Stability after convergence
+            stabilities = [item[1]['stability'] * 100 for item in sorted_experiments]
+            
+            plt.subplot(2, 1, 2)
+            bars = plt.bar(names, stabilities, alpha=0.7)
+            
+            # Color bars based on stability (lower is better)
+            cmap_stability = plt.cm.RdYlGn_r
+            max_std = max(stabilities) if stabilities else 1.0
+            for i, bar in enumerate(bars):
+                bar.set_color(cmap_stability(stabilities[i]/max_std if max_std > 0 else 0))
+            
+            plt.xlabel('Experiment', fontsize=12)
+            plt.ylabel('Standard Deviation (%)', fontsize=12)
+            plt.title('Stability After Convergence (Lower is Better)', fontsize=14)
+            plt.xticks(rotation=45, ha='right')
+            plt.grid(True, linestyle='--', alpha=0.7)
+            
+            plt.tight_layout()
+            
+            # Add second colorbar
+            sm2 = plt.cm.ScalarMappable(cmap=cmap_stability, norm=plt.Normalize(0, max_std))
+            sm2.set_array([])
+            plt.subplots_adjust(right=0.85)  # Make room for colorbar
+            cax2 = plt.gcf().add_axes([0.88, 0.1, 0.02, 0.35])  # Define colorbar axes
+            cbar2 = plt.colorbar(sm2, cax=cax2)
+            cbar2.set_label('Std Dev (%) - Lower is better')
+            
+            if save:
+                plt.savefig(os.path.join(self.plots_dir, 'convergence_analysis.png'), dpi=300, bbox_inches='tight')
+                plt.savefig(os.path.join(self.plots_dir, 'convergence_analysis.pdf'), bbox_inches='tight')
+            
+            if show:
+                plt.show()
+            else:
+                plt.close()
+            
+            # Save convergence data
+            with open(os.path.join(self.metrics_dir, "convergence_metrics.json"), 'w') as f:
+                json.dump(convergence_data, f, indent=4)
+                
+            return convergence_data
+        
+        except Exception as e:
+            print(f"Error in convergence analysis: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {}
     
 
     def generate_comprehensive_tables(self):
@@ -891,239 +1035,326 @@ class FederatedLearningEvaluator:
         Generate comprehensive tables comparing defense effectiveness against different attacks.
         Prints formatted tables and saves them to files.
         """
-        # Define the defenses and attacks based on experiments
-        defenses = set()
-        attacks = set()
-        
-        for name in self.experiments.keys():
-            parts = name.split('_')
-            if len(parts) >= 2:
-                defense = parts[0]
-                attack = '_'.join(parts[1:])
-                defenses.add(defense)
-                attacks.add(attack)
-        
-        defenses = sorted(list(defenses))
-        attacks = sorted(list(attacks))
-        
-        # Initialize result tables
-        final_accuracy_table = pd.DataFrame(index=defenses, columns=attacks)
-        best_accuracy_table = pd.DataFrame(index=defenses, columns=attacks)
-        loss_table = pd.DataFrame(index=defenses, columns=attacks)
-        
-        # Fill tables with data from experiments
-        for name, experiment in self.experiments.items():
-            parts = name.split('_')
-            if len(parts) >= 2:
-                defense = parts[0]
-                attack = '_'.join(parts[1:])
-                
-                results = experiment['results']
-                if results:
-                    # Get the final and best accuracy
-                    final_acc = results[-1]['test_accuracy'] * 100
-                    best_acc = max(r['test_accuracy'] for r in results) * 100
-                    final_loss = results[-1]['test_loss']
+        try:
+            # Define the defenses and attacks based on experiments
+            defenses = set()
+            attacks = set()
+            
+            for name in self.experiments.keys():
+                if 'results' not in self.experiments[name] or not self.experiments[name]['results']:
+                    continue
                     
-                    # Store in tables
-                    final_accuracy_table.loc[defense, attack] = final_acc
-                    best_accuracy_table.loc[defense, attack] = best_acc
-                    loss_table.loc[defense, attack] = final_loss
-        
-        # Calculate impact of attacks (relative to clean)
-        impact_table = pd.DataFrame(index=defenses, columns=attacks)
-        for defense in defenses:
+                parts = name.split('_')
+                if len(parts) >= 2:
+                    defense = parts[0]
+                    attack = '_'.join(parts[1:])
+                    defenses.add(defense)
+                    attacks.add(attack)
+            
+            if not defenses or not attacks:
+                print("No valid experiments found for table generation")
+                return
+                
+            defenses = sorted(list(defenses))
+            attacks = sorted(list(attacks))
+            
+            # Initialize result tables
+            final_accuracy_table = pd.DataFrame(index=defenses, columns=attacks)
+            best_accuracy_table = pd.DataFrame(index=defenses, columns=attacks)
+            loss_table = pd.DataFrame(index=defenses, columns=attacks)
+            
+            # Fill tables with data from experiments
+            for name, experiment in self.experiments.items():
+                if 'results' not in experiment or not experiment['results']:
+                    continue
+                    
+                parts = name.split('_')
+                if len(parts) >= 2:
+                    defense = parts[0]
+                    attack = '_'.join(parts[1:])
+                    
+                    results = experiment['results']
+                    if results:
+                        # Get the final and best accuracy
+                        final_acc = results[-1]['test_accuracy'] * 100
+                        best_acc = max(r['test_accuracy'] for r in results) * 100
+                        final_loss = results[-1]['test_loss']
+                        
+                        # Store in tables
+                        final_accuracy_table.loc[defense, attack] = final_acc
+                        best_accuracy_table.loc[defense, attack] = best_acc
+                        loss_table.loc[defense, attack] = final_loss
+            
+            # Calculate impact of attacks (relative to clean)
+            impact_table = pd.DataFrame(index=defenses, columns=attacks)
+            for defense in defenses:
+                for attack in attacks:
+                    if attack == "clean":
+                        impact_table.loc[defense, attack] = 0.0
+                    else:
+                        if pd.notna(final_accuracy_table.loc[defense, "clean"]) and pd.notna(final_accuracy_table.loc[defense, attack]):
+                            clean_acc = final_accuracy_table.loc[defense, "clean"]
+                            attack_acc = final_accuracy_table.loc[defense, attack]
+                            impact = attack_acc - clean_acc
+                            impact_table.loc[defense, attack] = impact
+            
+            # Print tables
+            print("\n=== Final Test Accuracy (%) ===")
+            print(final_accuracy_table.fillna("--"))
+            
+            print("\n=== Best Test Accuracy (%) ===")
+            print(best_accuracy_table.fillna("--"))
+            
+            print("\n=== Test Loss ===")
+            print(loss_table.fillna("--"))
+            
+            print("\n=== Attack Impact (percentage points, positive = improved performance) ===")
+            print(impact_table.round(2).fillna("--"))
+            
+            # Calculate stability (difference between best and final accuracy)
+            stability_table = best_accuracy_table - final_accuracy_table
+            print("\n=== Stability (best - final accuracy, lower is better) ===")
+            print(stability_table.round(2).fillna("--"))
+            
+            # Defense rankings
+            rankings = {}
             for attack in attacks:
-                if attack == "clean":
-                    impact_table.loc[defense, attack] = 0.0
+                # Sort defenses by final accuracy (skip NaN values)
+                valid_defenses = final_accuracy_table[attack].dropna()
+                if not valid_defenses.empty:
+                    ranked_defenses = valid_defenses.sort_values(ascending=False)
+                    rankings[attack] = list(ranked_defenses.index)
                 else:
-                    if pd.notna(final_accuracy_table.loc[defense, "clean"]) and pd.notna(final_accuracy_table.loc[defense, attack]):
-                        clean_acc = final_accuracy_table.loc[defense, "clean"]
-                        attack_acc = final_accuracy_table.loc[defense, attack]
-                        impact = attack_acc - clean_acc
-                        impact_table.loc[defense, attack] = impact
+                    rankings[attack] = []
+            
+            print("\n=== Defense Rankings for Each Attack ===")
+            rankings_df = pd.DataFrame(rankings)
+            print(rankings_df)
+            
+            # Key observations
+            print("\n=== Key Observations ===")
+            
+            # Best defense for each attack
+            print("Best Defense for Each Attack:")
+            for attack in attacks:
+                valid_defenses = final_accuracy_table[attack].dropna()
+                if not valid_defenses.empty:
+                    best_defense = valid_defenses.idxmax()
+                    score = final_accuracy_table.loc[best_defense, attack]
+                    print(f"- {attack}: {best_defense} ({score:.2f}%)")
+                else:
+                    print(f"- {attack}: No data available")
+            
+            # Most stable defense
+            valid_stability = stability_table.mean(axis=1).dropna()
+            if not valid_stability.empty:
+                most_stable = valid_stability.idxmin()
+                print(f"\nMost Stable Defense: {most_stable} (avg deviation: {valid_stability[most_stable]:.2f}%)")
+            
+            # Most robust against all attacks
+            attack_cols = [col for col in attacks if col != "clean"]
+            if attack_cols:
+                # Calculate mean accuracy across attacks, excluding NaN
+                robustness = final_accuracy_table[attack_cols].mean(axis=1, skipna=True).dropna()
+                if not robustness.empty:
+                    most_robust = robustness.idxmax()
+                    print(f"\nMost Robust Defense Against All Attacks: {most_robust} (avg accuracy: {robustness[most_robust]:.2f}%)")
+            
+            # Save tables directory
+            tables_dir = os.path.join(self.save_dir, "tables")
+            os.makedirs(tables_dir, exist_ok=True)
+            
+            # Save tables to CSV
+            final_accuracy_table.to_csv(os.path.join(tables_dir, "final_accuracy.csv"))
+            best_accuracy_table.to_csv(os.path.join(tables_dir, "best_accuracy.csv"))
+            loss_table.to_csv(os.path.join(tables_dir, "test_loss.csv"))
+            impact_table.to_csv(os.path.join(tables_dir, "attack_impact.csv"))
+            
+            print(f"\nTables saved to {tables_dir}")
+            
+            return {
+                "final_accuracy": final_accuracy_table,
+                "best_accuracy": best_accuracy_table,
+                "loss": loss_table,
+                "impact": impact_table
+            }
         
-        # Print tables
-        print("\n=== Final Test Accuracy (%) ===")
-        print(final_accuracy_table.fillna("--"))
-        
-        print("\n=== Best Test Accuracy (%) ===")
-        print(best_accuracy_table.fillna("--"))
-        
-        print("\n=== Test Loss ===")
-        print(loss_table.fillna("--"))
-        
-        print("\n=== Attack Impact (percentage points, positive = improved performance) ===")
-        print(impact_table.round(2).fillna("--"))
-        
-        # Calculate stability (difference between best and final accuracy)
-        stability_table = best_accuracy_table - final_accuracy_table
-        print("\n=== Stability (best - final accuracy, lower is better) ===")
-        print(stability_table.round(2).fillna("--"))
-        
-        # Defense rankings
-        rankings = {}
-        for attack in attacks:
-            # Sort defenses by final accuracy (skip NaN values)
-            valid_defenses = final_accuracy_table[attack].dropna()
-            if not valid_defenses.empty:
-                ranked_defenses = valid_defenses.sort_values(ascending=False)
-                rankings[attack] = list(ranked_defenses.index)
-            else:
-                rankings[attack] = []
-        
-        print("\n=== Defense Rankings for Each Attack ===")
-        rankings_df = pd.DataFrame(rankings)
-        print(rankings_df)
-        
-        # Key observations
-        print("\n=== Key Observations ===")
-        
-        # Best defense for each attack
-        print("Best Defense for Each Attack:")
-        for attack in attacks:
-            valid_defenses = final_accuracy_table[attack].dropna()
-            if not valid_defenses.empty:
-                best_defense = valid_defenses.idxmax()
-                score = final_accuracy_table.loc[best_defense, attack]
-                print(f"- {attack}: {best_defense} ({score:.2f}%)")
-            else:
-                print(f"- {attack}: No data available")
-        
-        # Most stable defense
-        valid_stability = stability_table.mean(axis=1).dropna()
-        if not valid_stability.empty:
-            most_stable = valid_stability.idxmin()
-            print(f"\nMost Stable Defense: {most_stable} (avg deviation: {valid_stability[most_stable]:.2f}%)")
-        
-        # Most robust against all attacks
-        attack_cols = [col for col in attacks if col != "clean"]
-        if attack_cols:
-            # Calculate mean accuracy across attacks, excluding NaN
-            robustness = final_accuracy_table[attack_cols].mean(axis=1, skipna=True).dropna()
-            if not robustness.empty:
-                most_robust = robustness.idxmax()
-                print(f"\nMost Robust Defense Against All Attacks: {most_robust} (avg accuracy: {robustness[most_robust]:.2f}%)")
-        
-        # Save tables directory
-        tables_dir = os.path.join(self.save_dir, "tables")
-        os.makedirs(tables_dir, exist_ok=True)
-        
-        # Save tables to CSV
-        final_accuracy_table.to_csv(os.path.join(tables_dir, "final_accuracy.csv"))
-        best_accuracy_table.to_csv(os.path.join(tables_dir, "best_accuracy.csv"))
-        loss_table.to_csv(os.path.join(tables_dir, "test_loss.csv"))
-        impact_table.to_csv(os.path.join(tables_dir, "attack_impact.csv"))
-        
-        print(f"\nTables saved to {tables_dir}")
-        
-        return {
-            "final_accuracy": final_accuracy_table,
-            "best_accuracy": best_accuracy_table,
-            "loss": loss_table,
-            "impact": impact_table
-        }
+        except Exception as e:
+            print(f"Error generating comprehensive tables: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return {}
 
 
     def generate_summary_report(self):
         """Generate a comprehensive summary report of all experiments."""
-        report = []
-        report.append("=" * 80)
-        report.append("Federated Learning Experiments Summary Report")
-        report.append("=" * 80)
-        
-        # Generate all metrics and plots
-        self.compute_attack_impact_metrics()
-        self.generate_defense_comparison_tables()
-        self.generate_client_performance_statistics()
-        self.plot_accuracy_comparison(save=True, show=False)
-        self.plot_loss_comparison(save=True, show=False)
-        self.plot_attack_impact(save=True, show=False)
-        self.plot_client_loss_distributions(save=True, show=False)
-        self.plot_client_statistics(save=True, show=False)
-        self.plot_convergence_analysis(save=True, show=False)
-        
-        # List all experiments
-        report.append("\nExperiments Summary:")
-        report.append("-" * 40)
-        
-        for name, experiment in self.experiments.items():
-            results = experiment['results']
+        try:
+            report = []
+            report.append("=" * 80)
+            report.append("Federated Learning Experiments Summary Report")
+            report.append("=" * 80)
             
-            if not results:
-                report.append(f"\nExperiment: {name} - NO RESULTS")
-                continue
+            # Generate all metrics and plots
+            try:
+                self.compute_attack_impact_metrics()
+            except Exception as e:
+                report.append(f"Error computing attack impact metrics: {str(e)}")
                 
-            # Performance metrics
-            accuracies = [round_data.get('test_accuracy', 0) * 100 for round_data in results]
-            losses = [round_data.get('test_loss', 0) for round_data in results]
+            try:
+                self.generate_defense_comparison_tables()
+            except Exception as e:
+                report.append(f"Error generating defense comparison tables: {str(e)}")
+                
+            try:
+                self.generate_client_performance_statistics()
+            except Exception as e:
+                report.append(f"Error generating client performance statistics: {str(e)}")
+                
+            try:
+                self.plot_accuracy_comparison(save=True, show=False)
+            except Exception as e:
+                report.append(f"Error plotting accuracy comparison: {str(e)}")
+                
+            try:
+                self.plot_loss_comparison(save=True, show=False)
+            except Exception as e:
+                report.append(f"Error plotting loss comparison: {str(e)}")
+                
+            try:
+                self.plot_attack_impact(save=True, show=False)
+            except Exception as e:
+                report.append(f"Error plotting attack impact: {str(e)}")
+                
+            try:
+                self.plot_client_loss_distributions(save=True, show=False)
+            except Exception as e:
+                report.append(f"Error plotting client loss distributions: {str(e)}")
+                
+            try:
+                self.plot_client_statistics(save=True, show=False)
+            except Exception as e:
+                report.append(f"Error plotting client statistics: {str(e)}")
+                
+            try:
+                self.plot_convergence_analysis(save=True, show=False)
+            except Exception as e:
+                report.append(f"Error plotting convergence analysis: {str(e)}")
             
-            report.append(f"\nExperiment: {name}")
-            report.append(f"- Final Test Accuracy: {accuracies[-1]:.2f}%")
-            report.append(f"- Best Test Accuracy: {max(accuracies):.2f}%")
-            report.append(f"- Final Test Loss: {losses[-1]:.4f}")
+            # List all experiments
+            report.append("\nExperiments Summary:")
+            report.append("-" * 40)
             
-            # Configuration summary if available
-            if 'config' in experiment and experiment['config']:
-                config = experiment['config']
+            if not self.experiments:
+                report.append("No experiments found.")
                 
-                report.append("\nConfiguration:")
-                report.append(f"- Number of Clients: {CONFIG.NUM_CLIENTS}")
-                report.append(f"- Clients Per Round: {CONFIG.CLIENTS_PER_ROUND}")
-                report.append(f"- Local Epochs: {CONFIG.LOCAL_EPOCHS}")
+                # Save report
+                report_path = os.path.join(self.save_dir, "summary_report.txt")
+                with open(report_path, 'w') as f:
+                    f.write("\n".join(report))
                 
-                if 'ATTACK_PARAMS' in config:
-                    attack_params = config['ATTACK_PARAMS']
-                    report.append("\nAttack Configuration:")
-                    report.append(f"- Attack Type: {attack_params.get('attack_type', 'unknown')}")
-                    report.append(f"- Malicious Clients: {len(attack_params.get('malicious_client_ids', []))}/{CONFIG.NUM_CLIENTS}")
-        
-        # Add overall comparison summary
-        report.append("\n" + "=" * 40)
-        report.append("OVERALL COMPARISONS")
-        report.append("=" * 40)
-        
-        # Best performing defenses for each attack
-        attack_impact = self.comparison_metrics
-        if attack_impact:
-            report.append("\nBest Defenses Per Attack:")
-            for attack, defenses in attack_impact.items():
-                if not defenses:
+                return "\n".join(report)
+            
+            for name, experiment in self.experiments.items():
+                if 'results' not in experiment or not experiment['results']:
+                    report.append(f"\nExperiment: {name} - NO RESULTS")
                     continue
                     
-                # Find best defense
-                best_defense = max(defenses.items(), key=lambda x: x[1]['final_accuracy'])
-                defense_name, metrics = best_defense
+                results = experiment['results']
                 
-                report.append(f"- {attack.replace('_', ' ').title()}: {defense_name.capitalize()} "
-                            f"({metrics['final_accuracy']*100:.2f}%)")
+                # Performance metrics
+                accuracies = [round_data.get('test_accuracy', 0) * 100 for round_data in results]
+                losses = [round_data.get('test_loss', 0) for round_data in results]
+                
+                report.append(f"\nExperiment: {name}")
+                report.append(f"- Final Test Accuracy: {accuracies[-1]:.2f}%")
+                report.append(f"- Best Test Accuracy: {max(accuracies):.2f}%")
+                report.append(f"- Final Test Loss: {losses[-1]:.4f}")
+                
+                # Configuration summary if available
+                if 'config' in experiment and experiment['config']:
+                    config = experiment['config']
+                    
+                    report.append("\nConfiguration:")
+                    report.append(f"- Number of Clients: {CONFIG.NUM_CLIENTS}")
+                    report.append(f"- Clients Per Round: {CONFIG.CLIENTS_PER_ROUND}")
+                    report.append(f"- Local Epochs: {CONFIG.LOCAL_EPOCHS}")
+                    
+                    if 'ATTACK_PARAMS' in config and config['ATTACK_PARAMS']:
+                        attack_params = config['ATTACK_PARAMS']
+                        report.append("\nAttack Configuration:")
+                        report.append(f"- Attack Type: {attack_params.get('attack_type', 'unknown')}")
+                        mal_clients = attack_params.get('malicious_client_ids', [])
+                        report.append(f"- Malicious Clients: {len(mal_clients)}/{CONFIG.NUM_CLIENTS}")
+            
+            # Add overall comparison summary
+            report.append("\n" + "=" * 40)
+            report.append("OVERALL COMPARISONS")
+            report.append("=" * 40)
+            
+            # Best performing defenses for each attack
+            attack_impact = self.comparison_metrics
+            if attack_impact:
+                report.append("\nBest Defenses Per Attack:")
+                for attack, defenses in attack_impact.items():
+                    if not defenses:
+                        continue
+                        
+                    # Find best defense
+                    best_defense = max(defenses.items(), key=lambda x: x[1]['final_accuracy'])
+                    defense_name, metrics = best_defense
+                    
+                    report.append(f"- {attack.replace('_', ' ').title()}: {defense_name.capitalize()} "
+                                f"({metrics['final_accuracy']*100:.2f}%)")
+            
+            # Final notes
+            report.append("\n" + "-" * 80)
+            report.append("Note: Detailed plots and metrics are available in the results directory.")
+            report.append("-" * 80)
+            
+            # Save report
+            report_path = os.path.join(self.save_dir, "summary_report.txt")
+            with open(report_path, 'w') as f:
+                f.write("\n".join(report))
+            
+            return "\n".join(report)
         
-        # Final notes
-        report.append("\n" + "-" * 80)
-        report.append("Note: Detailed plots and metrics are available in the results directory.")
-        report.append("-" * 80)
-        
-        # Save report
-        report_path = os.path.join(self.save_dir, "summary_report.txt")
-        with open(report_path, 'w') as f:
-            f.write("\n".join(report))
-        
-        return "\n".join(report)
+        except Exception as e:
+            error_report = ["=" * 80,
+                          "ERROR IN REPORT GENERATION",
+                          "=" * 80,
+                          str(e)]
+            
+            # Save error report
+            report_path = os.path.join(self.save_dir, "error_report.txt")
+            with open(report_path, 'w') as f:
+                f.write("\n".join(error_report))
+            
+            import traceback
+            traceback.print_exc()
+            
+            return "\n".join(error_report)
 
     def save_all_visualizations(self):
         """Generate and save all visualizations in one go."""
-        self.plot_accuracy_comparison(save=True, show=False)
-        self.plot_loss_comparison(save=True, show=False)
-        self.plot_attack_impact(save=True, show=False)
-        self.plot_client_loss_distributions(save=True, show=False)
-        self.plot_client_statistics(save=True, show=False)
-        self.plot_convergence_analysis(save=True, show=False)
+        try:
+            self.plot_accuracy_comparison(save=True, show=False)
+            self.plot_loss_comparison(save=True, show=False)
+            self.plot_attack_impact(save=True, show=False)
+            self.plot_client_loss_distributions(save=True, show=False)
+            self.plot_client_statistics(save=True, show=False)
+            self.plot_convergence_analysis(save=True, show=False)
+            
+            # Generate reports
+            self.compute_attack_impact_metrics()
+            self.generate_defense_comparison_tables()
+            self.generate_client_performance_statistics()
+            
+            print(f"All visualizations and reports saved to {self.save_dir}")
+            
+            return True
         
-        # Generate reports
-        self.compute_attack_impact_metrics()
-        self.generate_defense_comparison_tables()
-        self.generate_client_performance_statistics()
-        
-        print(f"All visualizations and reports saved to {self.save_dir}")
-        
-        return True
+        except Exception as e:
+            print(f"Error saving visualizations: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return False

@@ -14,16 +14,54 @@ else:
 # ======================
 # Model and Dataset Options
 # ======================
+# config.py updates
+
+# ======================
+# Model and Dataset Options
+# ======================
+# Updated configuration for Fashion-MNIST support
+
+# ======================
+# Model and Dataset Options
+# ======================
 MODEL_TYPE = "resnet18"  # Options: "resnet18", "resnet50", "vit"
-DATASET = "CIFAR10"  # Options: "CIFAR10", "CIFAR100"
-NUM_CHANNELS = 3
-NUM_CLASSES = 10  # Adjust for CIFAR-10 (or change for CIFAR-100)
+DATASET = "FASHION_MNIST"      # Options: "CIFAR10", "FASHION_MNIST"
+
+# Set dataset-specific parameters
+if DATASET == "CIFAR10":
+    NUM_CHANNELS = 3
+    NUM_CLASSES = 10  # 10 classes in CIFAR-10
+    IMAGE_SIZE = 32   # 32x32 images
+    CLASS_NAMES = [
+        'airplane', 'automobile', 'bird', 'cat', 'deer',
+        'dog', 'frog', 'horse', 'ship', 'truck'
+    ]
+    # Normalization constants for CIFAR10
+    MEAN = (0.4914, 0.4822, 0.4465)
+    STD = (0.2023, 0.1994, 0.2010)
+elif DATASET == "FASHION_MNIST":
+    NUM_CHANNELS = 1
+    NUM_CLASSES = 10  # 10 classes in Fashion-MNIST
+    IMAGE_SIZE = 28   # 28x28 images
+    CLASS_NAMES = [
+        'T-shirt/top', 'Trouser', 'Pullover', 'Dress', 'Coat',
+        'Sandal', 'Shirt', 'Sneaker', 'Bag', 'Ankle boot'
+    ]
+    # Normalization constants for Fashion-MNIST
+    MEAN = (0.2860,)
+    STD = (0.3530,)
+else:
+    raise ValueError(f"Unsupported dataset: {DATASET}")
 
 # ViT-specific parameters (if MODEL_TYPE=="vit")
-VIT_PATCH_SIZE = 32  # For 32x32 images, smaller patch size may be needed
-VIT_EMBED_DIM = 32
-VIT_DEPTH = 4
-VIT_NUM_HEADS = 2
+if MODEL_TYPE.lower() == "vit":
+    if DATASET == "CIFAR10":
+        VIT_PATCH_SIZE = 8  # For 32x32 CIFAR10 images, smaller patch size
+    else:  # Fashion-MNIST
+        VIT_PATCH_SIZE = 7  # For 28x28 Fashion-MNIST images
+    VIT_EMBED_DIM = 384
+    VIT_DEPTH = 4
+    VIT_NUM_HEADS = 6
 
 
 # ======================
@@ -66,21 +104,21 @@ ENABLE_WANDB = False
 # Existing Attack Configurations
 # ======================
 LABEL_FLIP_CONFIG = {
-    'num_malicious': 7,
+    'num_malicious': 6,
     'flip_probability': 1.0,
-    'source_label': 0,
-    'target_label': 2,
-    'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
+    'source_label': None,
+    'target_label': 9,
+    'malicious_client_ids': [1, 2, 3, 4, 5, 6],
     'attack_type': 'label_flip'
 }
 
 BACKDOOR_CONFIG = {
-    'num_malicious': 7,
+    'num_malicious': 6,
     'target_label': 0,
-    'poison_ratio': 0.8,
-    'trigger_size': 5,
-    'trigger_intensity': 2.0,
-    'malicious_client_ids': [1, 2, 3, 4, 5, 6, 7],
+    'poison_ratio': 0.9,
+    'trigger_size': 6,
+    'trigger_intensity': 3.0,
+    'malicious_client_ids': [1, 2, 3, 4, 5, 6],
     'attack_type': 'backdoor'
 }
 

@@ -146,8 +146,13 @@ class LabelFlipperClient(FederatedClient):
         # Then call the parent class initialization
         super().__init__(client_id, data_indices)
         
+# Update to LabelFlipperClient.setup_dataset method
+
     def setup_dataset(self):
         """Setup the local dataset with label flipping poisoning."""
+        # First, debug print to verify indices
+        print(f"LabelFlipper Client {self.client_id} received {len(self.data_indices)} indices")
+        
         # Load the original dataset
         original_dataset = Subset(
             self.load_base_dataset(),
@@ -175,14 +180,17 @@ class LabelFlipperClient(FederatedClient):
             verbose=self.verbose
         )
         
+        # Calculate optimal batch size
+        num_samples = len(self.dataset)
+        batch_size = min(config.LOCAL_BATCH_SIZE, max(config.MIN_BATCH_SIZE, num_samples // 10))
+        
         # Create the data loader
-        batch_size = min(config.LOCAL_BATCH_SIZE, len(self.dataset))
         self.dataloader = DataLoader(
             self.dataset,
             batch_size=batch_size,
             shuffle=True,
             num_workers=0,
-            drop_last=False,  # Changed to False to ensure all data is used
+            drop_last=False,
             pin_memory=True if self.device != torch.device("cpu") else False
         )
         
@@ -191,18 +199,30 @@ class LabelFlipperClient(FederatedClient):
         total_count = len(self.dataset)
         if self.verbose:
             print(f"Client {self.client_id} poisoned {flipped_count}/{total_count} "
-                  f"samples ({(flipped_count/total_count)*100:.2f}%)")
-    
+                f"samples ({(flipped_count/total_count)*100:.2f}%)")
+            print(f"Batch size: {batch_size}")
+
     def load_base_dataset(self):
         """Load the base dataset with transforms."""
-        from torchvision.datasets import CIFAR10
-        return CIFAR10(
-            root=config.DATA_PATH,
-            train=True,
-            download=True,
-            transform=self.transform
-        )
-        
+        if config.DATASET.lower() == "cifar10":
+            from torchvision.datasets import CIFAR10
+            return CIFAR10(
+                root=config.DATA_PATH,
+                train=True,
+                download=True,
+                transform=self.transform
+            )
+        elif config.DATASET.lower() == "fashion_mnist":
+            from torchvision.datasets import FashionMNIST
+            return FashionMNIST(
+                root=config.DATA_PATH,
+                train=True,
+                download=True,
+                transform=self.transform
+            )
+        else:
+            raise ValueError(f"Unsupported dataset: {config.DATASET}")
+    
     def train_local_model(self):
         """
         Train the local model with poisoned data.
