@@ -99,7 +99,7 @@ propcache
 proto-plus
 protobuf
 psutil
-pyarrow
+# pyarrow
 pyasn1
 pyasn1_modules
 pycryptodome
