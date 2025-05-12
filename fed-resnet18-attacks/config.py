@@ -24,6 +24,54 @@ else:
 # ======================
 # Model and Dataset Options
 # ======================
+# Add these new parameters to config.py
+
+# ======================
+# Text Model and Dataset Options
+# ======================
+TEXT_ENABLED = True  # Set to True when running text experiments
+TEXT_MODEL_TYPE = "distilbert"  # Currently only supporting DistilBERT
+TEXT_DATASET = "AG_NEWS"  # Currently only supporting AG News
+
+# Text model parameters
+TEXT_MAX_LENGTH = 128  # Maximum sequence length for tokenization
+TEXT_BATCH_SIZE = 16  # Batch size for text data
+TEXT_LEARNING_RATE = 2e-5  # Learning rate for text model
+TEXT_LOCAL_EPOCHS = 2  # Local epochs for text model (can be less than image due to higher computation)
+
+# Text dataset parameters
+TEXT_DATA_PATH = "./data/text"  # Directory to cache text datasets
+TEXT_NUM_CLASSES = 4  # AG News has 4 classes
+TEXT_CLASS_NAMES = [
+    'World', 'Sports', 'Business', 'Sci/Tech'
+]
+
+# Text data distribution
+TEXT_IID = True  # Whether to use IID distribution for text data
+TEXT_ALPHA = 0.5  # Dirichlet concentration parameter for non-IID text distribution
+
+# ======================
+# Text Attack Configurations
+# ======================
+TEXT_LABEL_FLIP_CONFIG = {
+    'num_malicious': 3,
+    'flip_probability': 1.0,
+    'source_label': None,  # Flip any label
+    'target_label': 3,     # to Sci/Tech
+    'malicious_client_ids': [1, 2, 3],
+    'attack_type': 'label_flip'
+}
+
+TEXT_BACKDOOR_CONFIG = {
+    'num_malicious': 3,
+    'target_label': 0,  # World
+    'poison_ratio': 0.5,
+    'trigger_phrases': ["as we know", "as mentioned earlier", "in this regard"],
+    'malicious_client_ids': [1, 2, 3],
+    'attack_type': 'backdoor'
+}
+
+
 MODEL_TYPE = "resnet18"  # Options: "resnet18", "resnet50", "vit"
 DATASET = "CIFAR10"      # Options: "CIFAR10", "FASHION_MNIST"
 

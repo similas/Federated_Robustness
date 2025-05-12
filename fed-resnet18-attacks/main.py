@@ -20,6 +20,11 @@ from attacks import (LabelFlipperClient, BackdoorClient)
 from defenses import (fedavg_aggregate, krum_aggregate, median_aggregate, norm_clipping_aggregate, enhanced_aaf_aggregate)
 from evaluation import FederatedLearningEvaluator
 
+# Import new text-related modules
+from text_dataset import AGNewsDataset, create_federated_agnews
+from text_model import TextClassifier
+from text_client import TextFederatedClient
+
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -45,11 +50,19 @@ class FederatedServer:
         self.device = config.DEVICE
         print(f"Server initialized with device: {self.device}")
         
+        # Check if we're running a text experiment
+        self.is_text_experiment = hasattr(config, 'TEXT_ENABLED') and config.TEXT_ENABLED
+        
         # Initialize global model based on configuration
         self.global_model = self._initialize_model()
         self.global_model = self.global_model.to(self.device)
         
-        self.setup_test_data()
+        # Setup appropriate test data based on experiment type
+        if self.is_text_experiment:
+            self.setup_text_test_data()
+        else:
+            self.setup_test_data()
+            
         self.setup_clients()
         self.setup_logging()
         
@@ -60,183 +73,221 @@ class FederatedServer:
             self.anomaly_scores_history = []
         self.defense_type = defense_type.lower()
 
-    # Updated _initialize_model method for FederatedServer class
-
     def _initialize_model(self):
         """
-        Initialize model with proper channel dimensions based on the dataset.
+        Initialize model with proper architecture based on experiment type.
         """
-        model_type = config.MODEL_TYPE.lower()
-        in_channels = config.NUM_CHANNELS  # This will be 3 for CIFAR10, 1 for Fashion-MNIST
-        
-        print(f"Initializing {model_type} model with {in_channels} input channels")
-        
-        if model_type == "resnet18":
-            from torchvision.models import resnet18
-            model = resnet18(num_classes=config.NUM_CLASSES)
-            
-            # If using Fashion-MNIST (grayscale), modify the first conv layer to accept 1 channel
-            if in_channels == 1 and hasattr(model, 'conv1'):
-                original_conv = model.conv1
-                model.conv1 = nn.Conv2d(1, original_conv.out_channels, 
-                                    kernel_size=original_conv.kernel_size, 
-                                    stride=original_conv.stride,
-                                    padding=original_conv.padding,
-                                    bias=False if original_conv.bias is None else True)
-                print("Modified ResNet's first conv layer to accept grayscale input")
-            return model
-            
-        elif model_type == "resnet50":
-            from torchvision.models import resnet50
-            model = resnet50(num_classes=config.NUM_CLASSES)
-            
-            # If using Fashion-MNIST (grayscale), modify the first conv layer to accept 1 channel
-            if in_channels == 1 and hasattr(model, 'conv1'):
-                original_conv = model.conv1
-                model.conv1 = nn.Conv2d(1, original_conv.out_channels, 
-                                    kernel_size=original_conv.kernel_size, 
-                                    stride=original_conv.stride,
-                                    padding=original_conv.padding,
-                                    bias=False if original_conv.bias is None else True)
-                print("Modified ResNet's first conv layer to accept grayscale input")
-            return model
-            
-        elif model_type == "vit":
-            from torchvision.models import vit_b_16, vit_b_32
-            model = vit_b_32(num_classes=config.NUM_CLASSES)
-            
-            # If using Fashion-MNIST (grayscale), modify the patch embedding to accept 1 channel
-            if in_channels == 1 and hasattr(model, 'patch_embed') and hasattr(model.patch_embed, 'proj'):
-                original_proj = model.patch_embed.proj
-                model.patch_embed.proj = nn.Conv2d(1, original_proj.out_channels,
-                                                kernel_size=original_proj.kernel_size,
-                                                stride=original_proj.stride,
-                                                padding=original_proj.padding)
-                print("Modified ViT's patch embedding to accept grayscale input")
-            return model
-            
+        if self.is_text_experiment:
+            print(f"Initializing TextClassifier model for {config.TEXT_DATASET}")
+            return TextClassifier(num_classes=config.TEXT_NUM_CLASSES)
         else:
-            print("Unknown MODEL_TYPE; defaulting to ResNet-18.")
-            from torchvision.models import resnet18
-            model = resnet18(num_classes=config.NUM_CLASSES)
+            # Original image model initialization code
+            model_type = config.MODEL_TYPE.lower()
+            in_channels = config.NUM_CHANNELS  # This will be 3 for CIFAR10, 1 for Fashion-MNIST
             
-            # If using Fashion-MNIST (grayscale), modify the first conv layer to accept 1 channel
-            if in_channels == 1 and hasattr(model, 'conv1'):
-                original_conv = model.conv1
-                model.conv1 = nn.Conv2d(1, original_conv.out_channels, 
-                                    kernel_size=original_conv.kernel_size, 
-                                    stride=original_conv.stride,
-                                    padding=original_conv.padding,
-                                    bias=False if original_conv.bias is None else True)
-                print("Modified ResNet's first conv layer to accept grayscale input")
-            return model
+            print(f"Initializing {model_type} model with {in_channels} input channels")
+            
+            if model_type == "resnet18":
+                from torchvision.models import resnet18
+                model = resnet18(num_classes=config.NUM_CLASSES)
+                
+                # If using Fashion-MNIST (grayscale), modify the first conv layer to accept 1 channel
+                if in_channels == 1 and hasattr(model, 'conv1'):
+                    original_conv = model.conv1
+                    model.conv1 = nn.Conv2d(1, original_conv.out_channels, 
+                                          kernel_size=original_conv.kernel_size, 
+                                          stride=original_conv.stride,
+                                          padding=original_conv.padding,
+                                          bias=False if original_conv.bias is None else True)
+                    print("Modified ResNet's first conv layer to accept grayscale input")
+                return model
+                
+            elif model_type == "resnet50":
+                from torchvision.models import resnet50
+                model = resnet50(num_classes=config.NUM_CLASSES)
+                
+                # If using Fashion-MNIST (grayscale), modify the first conv layer to accept 1 channel
+                if in_channels == 1 and hasattr(model, 'conv1'):
+                    original_conv = model.conv1
+                    model.conv1 = nn.Conv2d(1, original_conv.out_channels, 
+                                          kernel_size=original_conv.kernel_size, 
+                                          stride=original_conv.stride,
+                                          padding=original_conv.padding,
+                                          bias=False if original_conv.bias is None else True)
+                    print("Modified ResNet's first conv layer to accept grayscale input")
+                return model
+                
+            elif model_type == "vit":
+                from torchvision.models import vit_b_16, vit_b_32
+                model = vit_b_32(num_classes=config.NUM_CLASSES)
+                
+                # If using Fashion-MNIST (grayscale), modify the patch embedding to accept 1 channel
+                if in_channels == 1 and hasattr(model, 'patch_embed') and hasattr(model.patch_embed, 'proj'):
+                    original_proj = model.patch_embed.proj
+                    model.patch_embed.proj = nn.Conv2d(1, original_proj.out_channels,
+                                                    kernel_size=original_proj.kernel_size,
+                                                    stride=original_proj.stride,
+                                                    padding=original_proj.padding)
+                    print("Modified ViT's patch embedding to accept grayscale input")
+                return model
+                
+            else:
+                print("Unknown MODEL_TYPE; defaulting to ResNet-18.")
+                from torchvision.models import resnet18
+                model = resnet18(num_classes=config.NUM_CLASSES)
+                
+                # If using Fashion-MNIST (grayscale), modify the first conv layer to accept 1 channel
+                if in_channels == 1 and hasattr(model, 'conv1'):
+                    original_conv = model.conv1
+                    model.conv1 = nn.Conv2d(1, original_conv.out_channels, 
+                                          kernel_size=original_conv.kernel_size, 
+                                          stride=original_conv.stride,
+                                          padding=original_conv.padding,
+                                          bias=False if original_conv.bias is None else True)
+                    print("Modified ResNet's first conv layer to accept grayscale input")
+                return model
 
-# Modified distribute_data method for FederatedServer class
+    def setup_text_test_data(self):
+        """Setup test dataset for text classification."""
+        max_length = config.TEXT_MAX_LENGTH if hasattr(config, 'TEXT_MAX_LENGTH') else 128
+        
+        self.test_dataset = AGNewsDataset(
+            split="test",
+            max_length=max_length
+        )
+        
+        self.test_loader = DataLoader(
+            self.test_dataset,
+            batch_size=config.TEST_BATCH_SIZE,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=True if self.device != torch.device("cpu") else False
+        )
+        
+        print(f"Loaded text test dataset with {len(self.test_dataset)} samples")
 
     def distribute_data(self):
         """
         Distribute data among clients with improved debugging and robustness.
+        Handles both image and text data depending on experiment type.
         """
-        # Choose the appropriate dataset based on configuration
-        if config.DATASET.lower() == "cifar10":
-            dataset = CIFAR10(root=config.DATA_PATH, train=True, download=True)
-        elif config.DATASET.lower() == "fashion_mnist":
-            dataset = FashionMNIST(root=config.DATA_PATH, train=True, download=True)
+        if self.is_text_experiment:
+            # Use text dataset distribution
+            iid = config.TEXT_IID if hasattr(config, 'TEXT_IID') else True
+            alpha = config.TEXT_ALPHA if hasattr(config, 'TEXT_ALPHA') else 0.5
+            
+            print(f"\nDistributing AG News text data among {config.NUM_CLIENTS} clients...")
+            print(f"Data distribution: {'IID' if iid else 'Non-IID (Dirichlet with alpha=' + str(alpha) + ')'}")
+            
+            # Create federated text dataset
+            client_data_indices, _, _ = create_federated_agnews(
+                num_clients=config.NUM_CLIENTS,
+                iid=iid,
+                alpha=alpha
+            )
+            return client_data_indices
         else:
-            raise ValueError(f"Unsupported dataset: {config.DATASET}")
-        
-        # Get labels (handling different attribute names between datasets)
-        if hasattr(dataset, 'targets'):
-            labels = np.array(dataset.targets)
-        elif hasattr(dataset, 'targets') and isinstance(dataset.targets, torch.Tensor):
-            labels = dataset.targets.numpy()
-        else:
-            raise AttributeError(f"Dataset {config.DATASET} doesn't have a recognized 'targets' attribute")
-        
-        # Initialize client data indices dictionary
-        client_data_indices = {i: [] for i in range(config.NUM_CLIENTS)}
-        
-        # Find indices for each class
-        class_indices = [np.where(labels == i)[0] for i in range(config.NUM_CLASSES)]
-        
-        # Calculate minimum samples per class
-        min_samples_per_class = max(1, config.MIN_SAMPLES_PER_CLIENT // config.NUM_CLASSES)
-        
-        print(f"\nDistributing data among {config.NUM_CLIENTS} clients...")
-        
-        # Distribute data by class for better balance
-        for client_id in range(config.NUM_CLIENTS):
-            client_indices = []
+            # Original image data distribution code
+            # Choose the appropriate dataset based on configuration
+            if config.DATASET.lower() == "cifar10":
+                dataset = CIFAR10(root=config.DATA_PATH, train=True, download=True)
+            elif config.DATASET.lower() == "fashion_mnist":
+                dataset = FashionMNIST(root=config.DATA_PATH, train=True, download=True)
+            else:
+                raise ValueError(f"Unsupported dataset: {config.DATASET}")
             
-            for class_idx in range(config.NUM_CLASSES):
-                available_indices = class_indices[class_idx]
-                
-                # Verify we have enough samples
-                if len(available_indices) < min_samples_per_class:
-                    print(f"Warning: Insufficient samples in class {class_idx}. " 
-                        f"Available: {len(available_indices)}, Required: {min_samples_per_class}")
-                    selected_indices = np.random.choice(available_indices, 
-                                                size=min(len(available_indices), min_samples_per_class), 
-                                                replace=False)
-                else:
-                    selected_indices = np.random.choice(available_indices, 
-                                                size=min_samples_per_class, 
-                                                replace=False)
-                
-                # Add selected indices to client's data
-                client_indices.extend(selected_indices)
-                
-                # Remove selected indices from available pool
-                mask = ~np.isin(class_indices[class_idx], selected_indices)
-                class_indices[class_idx] = class_indices[class_idx][mask]
+            # Get labels (handling different attribute names between datasets)
+            if hasattr(dataset, 'targets'):
+                labels = np.array(dataset.targets)
+            elif hasattr(dataset, 'targets') and isinstance(dataset.targets, torch.Tensor):
+                labels = dataset.targets.numpy()
+            else:
+                raise AttributeError(f"Dataset {config.DATASET} doesn't have a recognized 'targets' attribute")
             
-            # Add the selected indices to the client
-            client_data_indices[client_id] = client_indices
-        
-        # Distribute remaining indices
-        remaining_indices = []
-        for lst in class_indices:
-            remaining_indices.extend(lst)
-        
-        # If we have remaining samples, distribute them
-        if remaining_indices:
-            np.random.shuffle(remaining_indices)
-            remaining_per_client = max(1, len(remaining_indices) // config.NUM_CLIENTS)
+            # Initialize client data indices dictionary
+            client_data_indices = {i: [] for i in range(config.NUM_CLIENTS)}
             
+            # Find indices for each class
+            class_indices = [np.where(labels == i)[0] for i in range(config.NUM_CLASSES)]
+            
+            # Calculate minimum samples per class
+            min_samples_per_class = max(1, config.MIN_SAMPLES_PER_CLIENT // config.NUM_CLASSES)
+            
+            print(f"\nDistributing data among {config.NUM_CLIENTS} clients...")
+            
+            # Distribute data by class for better balance
             for client_id in range(config.NUM_CLIENTS):
-                start_idx = client_id * remaining_per_client
-                end_idx = start_idx + remaining_per_client
+                client_indices = []
                 
-                # Ensure the last client gets any leftover samples
-                if client_id == config.NUM_CLIENTS - 1:
-                    end_idx = len(remaining_indices)
+                for class_idx in range(config.NUM_CLASSES):
+                    available_indices = class_indices[class_idx]
+                    
+                    # Verify we have enough samples
+                    if len(available_indices) < min_samples_per_class:
+                        print(f"Warning: Insufficient samples in class {class_idx}. " 
+                            f"Available: {len(available_indices)}, Required: {min_samples_per_class}")
+                        selected_indices = np.random.choice(available_indices, 
+                                                    size=min(len(available_indices), min_samples_per_class), 
+                                                    replace=False)
+                    else:
+                        selected_indices = np.random.choice(available_indices, 
+                                                    size=min_samples_per_class, 
+                                                    replace=False)
+                    
+                    # Add selected indices to client's data
+                    client_indices.extend(selected_indices)
+                    
+                    # Remove selected indices from available pool
+                    mask = ~np.isin(class_indices[class_idx], selected_indices)
+                    class_indices[class_idx] = class_indices[class_idx][mask]
                 
-                # Add the additional indices if within bounds
-                if start_idx < len(remaining_indices):
-                    additional_indices = remaining_indices[start_idx:min(end_idx, len(remaining_indices))]
-                    client_data_indices[client_id].extend(additional_indices)
-        
-        # Print distribution statistics
-        print("\nData Distribution Statistics:")
-        print("-" * 30)
-        
-        for client_id, indices in client_data_indices.items():
-            # Verify client got indices
-            if not indices:
-                print(f"ERROR: Client {client_id} received ZERO indices!")
-                continue
+                # Add the selected indices to the client
+                client_data_indices[client_id] = client_indices
+            
+            # Distribute remaining indices
+            remaining_indices = []
+            for lst in class_indices:
+                remaining_indices.extend(lst)
+            
+            # If we have remaining samples, distribute them
+            if remaining_indices:
+                np.random.shuffle(remaining_indices)
+                remaining_per_client = max(1, len(remaining_indices) // config.NUM_CLIENTS)
                 
-            class_dist = np.bincount(labels[indices], minlength=config.NUM_CLASSES)
-            print(f"Client {client_id}: {len(indices)} samples")
-            print(f"Class distribution: {class_dist}")
-        
-        # Verify minimum requirements
-        min_samples = min(len(indices) for indices in client_data_indices.values())
-        if min_samples < config.MIN_SAMPLES_PER_CLIENT:
-            print(f"Warning: Some clients have fewer than {config.MIN_SAMPLES_PER_CLIENT} samples. " 
-                f"Minimum is {min_samples}.")
-        
-        return client_data_indices
+                for client_id in range(config.NUM_CLIENTS):
+                    start_idx = client_id * remaining_per_client
+                    end_idx = start_idx + remaining_per_client
+                    
+                    # Ensure the last client gets any leftover samples
+                    if client_id == config.NUM_CLIENTS - 1:
+                        end_idx = len(remaining_indices)
+                    
+                    # Add the additional indices if within bounds
+                    if start_idx < len(remaining_indices):
+                        additional_indices = remaining_indices[start_idx:min(end_idx, len(remaining_indices))]
+                        client_data_indices[client_id].extend(additional_indices)
+            
+            # Print distribution statistics
+            print("\nData Distribution Statistics:")
+            print("-" * 30)
+            
+            for client_id, indices in client_data_indices.items():
+                # Verify client got indices
+                if not indices:
+                    print(f"ERROR: Client {client_id} received ZERO indices!")
+                    continue
+                    
+                class_dist = np.bincount(labels[indices], minlength=config.NUM_CLASSES)
+                print(f"Client {client_id}: {len(indices)} samples")
+                print(f"Class distribution: {class_dist}")
+            
+            # Verify minimum requirements
+            min_samples = min(len(indices) for indices in client_data_indices.values())
+            if min_samples < config.MIN_SAMPLES_PER_CLIENT:
+                print(f"Warning: Some clients have fewer than {config.MIN_SAMPLES_PER_CLIENT} samples. " 
+                    f"Minimum is {min_samples}.")
+            
+            return client_data_indices
 
     def setup_test_data(self):
         """
@@ -301,49 +352,90 @@ class FederatedServer:
                 continue
             print(f"Client {client_id}: setting up with {len(indices)} indices")
         
-        # Setup honest clients if no attack configuration
-        if not attack_params:
+        # Setup clients based on experiment type
+        if self.is_text_experiment:
+            # Text experiment clients
+            if not attack_params:
+                # Setup honest text clients
+                for client_id in range(config.NUM_CLIENTS):
+                    if client_id not in client_data_indices or not client_data_indices[client_id]:
+                        print(f"ERROR: Skipping client {client_id} setup due to missing data indices")
+                        continue
+                        
+                    print(f"Setting up honest text client {client_id}")
+                    try:
+                        self.clients[client_id] = TextFederatedClient(client_id, client_data_indices[client_id])
+                        print(f"Successfully initialized text client {client_id}")
+                    except Exception as e:
+                        print(f"Error initializing text client {client_id}: {e}")
+                return
+
+            # Setup with attack configuration for text
+            malicious_clients = set(attack_params['malicious_client_ids'])
+            attack_type = attack_params.get('attack_type', '')
+            
             for client_id in range(config.NUM_CLIENTS):
                 if client_id not in client_data_indices or not client_data_indices[client_id]:
                     print(f"ERROR: Skipping client {client_id} setup due to missing data indices")
                     continue
                     
-                print(f"Setting up honest client {client_id}")
                 try:
-                    self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
+                    if client_id in malicious_clients:
+                        print(f"Setting up malicious text client {client_id} with {attack_type} attack")
+                        self.clients[client_id] = TextFederatedClient(client_id, client_data_indices[client_id], attack_params)
+                    else:
+                        print(f"Setting up honest text client {client_id}")
+                        self.clients[client_id] = TextFederatedClient(client_id, client_data_indices[client_id])
+                        
+                    print(f"Successfully initialized text client {client_id}")
+                except Exception as e:
+                    print(f"Error initializing text client {client_id}: {e}")
+
+        else:
+            # Original image client setup
+            # Setup honest clients if no attack configuration
+            if not attack_params:
+                for client_id in range(config.NUM_CLIENTS):
+                    if client_id not in client_data_indices or not client_data_indices[client_id]:
+                        print(f"ERROR: Skipping client {client_id} setup due to missing data indices")
+                        continue
+                        
+                    print(f"Setting up honest client {client_id}")
+                    try:
+                        self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
+                        print(f"Successfully initialized client {client_id}")
+                    except Exception as e:
+                        print(f"Error initializing client {client_id}: {e}")
+                return
+
+            # Setup with attack configuration
+            malicious_clients = set(attack_params['malicious_client_ids'])
+            attack_type = attack_params.get('attack_type', '')
+            
+            for client_id in range(config.NUM_CLIENTS):
+                if client_id not in client_data_indices or not client_data_indices[client_id]:
+                    print(f"ERROR: Skipping client {client_id} setup due to missing data indices")
+                    continue
+                    
+                try:
+                    if client_id in malicious_clients:
+                        if attack_type == 'label_flip':
+                            print(f"Setting up label flipper client {client_id}")
+                            self.clients[client_id] = LabelFlipperClient(client_id, client_data_indices[client_id], attack_params)
+                        elif attack_type == 'backdoor':
+                            print(f"Setting up backdoor client {client_id}")
+                            self.clients[client_id] = BackdoorClient(client_id, client_data_indices[client_id], attack_params)
+                        # Include other attack types as needed
+                        else:
+                            print(f"Unknown attack type: {attack_type}. Setting up honest client {client_id}")
+                            self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
+                    else:
+                        print(f"Setting up honest client {client_id}")
+                        self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
+                        
                     print(f"Successfully initialized client {client_id}")
                 except Exception as e:
                     print(f"Error initializing client {client_id}: {e}")
-            return
-
-        # Setup with attack configuration
-        malicious_clients = set(attack_params['malicious_client_ids'])
-        attack_type = attack_params.get('attack_type', '')
-        
-        for client_id in range(config.NUM_CLIENTS):
-            if client_id not in client_data_indices or not client_data_indices[client_id]:
-                print(f"ERROR: Skipping client {client_id} setup due to missing data indices")
-                continue
-                
-            try:
-                if client_id in malicious_clients:
-                    if attack_type == 'label_flip':
-                        print(f"Setting up label flipper client {client_id}")
-                        self.clients[client_id] = LabelFlipperClient(client_id, client_data_indices[client_id], attack_params)
-                    elif attack_type == 'backdoor':
-                        print(f"Setting up backdoor client {client_id}")
-                        self.clients[client_id] = BackdoorClient(client_id, client_data_indices[client_id], attack_params)
-                    # Include other attack types as needed
-                    else:
-                        print(f"Unknown attack type: {attack_type}. Setting up honest client {client_id}")
-                        self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
-                else:
-                    print(f"Setting up honest client {client_id}")
-                    self.clients[client_id] = FederatedClient(client_id, client_data_indices[client_id])
-                    
-                print(f"Successfully initialized client {client_id}")
-            except Exception as e:
-                print(f"Error initializing client {client_id}: {e}")
 
     def setup_logging(self):
         if config.ENABLE_WANDB:
@@ -368,18 +460,36 @@ class FederatedServer:
             return fedavg_aggregate(local_models, sample_counts, self.device)
         
     def evaluate(self):
+        """Evaluate the global model on test data."""
         self.global_model.eval()
         criterion = nn.CrossEntropyLoss()
         total_loss, correct, samples_count = 0, 0, 0
+        
         with torch.no_grad():
-            for data, target in self.test_loader:
-                data = data.to(self.device, non_blocking=True)
-                target = target.to(self.device, non_blocking=True)
-                output = self.global_model(data)
-                total_loss += criterion(output, target).cpu().item() * len(data)
-                pred = output.argmax(dim=1, keepdim=True)
-                correct += pred.eq(target.view_as(pred)).sum().cpu().item()
-                samples_count += len(data)
+            if self.is_text_experiment:
+                # Text evaluation logic
+                for batch in self.test_loader:
+                    encoding, labels = batch
+                    encoding = {k: v.to(self.device) for k, v in encoding.items()}
+                    labels = labels.to(self.device)
+                    
+                    outputs = self.global_model(encoding['input_ids'], encoding['attention_mask'])
+                    total_loss += criterion(outputs, labels).cpu().item() * len(labels)
+                    
+                    pred = outputs.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(labels.view_as(pred)).sum().cpu().item()
+                    samples_count += len(labels)
+            else:
+                # Original image evaluation logic
+                for data, target in self.test_loader:
+                    data = data.to(self.device, non_blocking=True)
+                    target = target.to(self.device, non_blocking=True)
+                    output = self.global_model(data)
+                    total_loss += criterion(output, target).cpu().item() * len(data)
+                    pred = output.argmax(dim=1, keepdim=True)
+                    correct += pred.eq(target.view_as(pred)).sum().cpu().item()
+                    samples_count += len(data)
+        
         return correct / samples_count, total_loss / samples_count
 
 
@@ -511,6 +621,7 @@ class FederatedServer:
 def run_experiment(defense_type, attack_config=None):
     """
     Run a federated learning experiment with the specified defense and attack configuration.
+    Supports both image and text experiments based on config.TEXT_ENABLED.
     
     Args:
         defense_type: The defense mechanism to use
@@ -537,9 +648,13 @@ def run_experiment(defense_type, attack_config=None):
     ATTACK_CONFIGURATION = attack_config
     
     # Log experiment configuration
-    dataset_name = config.DATASET
-    print(f"\nRunning experiment with {defense_type.upper()} defense on {dataset_name}")
-    print(f"Model: {config.MODEL_TYPE}")
+    is_text_experiment = hasattr(config, 'TEXT_ENABLED') and config.TEXT_ENABLED
+    dataset_name = config.TEXT_DATASET if is_text_experiment else config.DATASET
+    model_type = config.TEXT_MODEL_TYPE if is_text_experiment else config.MODEL_TYPE
+    
+    print(f"\nRunning {'text' if is_text_experiment else 'image'} experiment with {defense_type.upper()} defense on {dataset_name}")
+    print(f"Model: {model_type}")
+    
     if attack_config:
         attack_type = attack_config.get('attack_type', 'unknown')
         print(f"Attack: {attack_type}")
@@ -562,8 +677,9 @@ def run_experiment(defense_type, attack_config=None):
         # Return empty history if training failed
         return [], experiment_config
     
-    # Save experiment results
-    experiment_dir = f"{defense_type}_{attack_config.get('attack_type', 'clean')}" if attack_config else f"{defense_type}_clean"
+    # Save experiment results with appropriate naming for text vs. image
+    exp_type = "text" if is_text_experiment else "image"
+    experiment_dir = f"{exp_type}_{defense_type}_{attack_config.get('attack_type', 'clean')}" if attack_config else f"{exp_type}_{defense_type}_clean"
     os.makedirs(f"results/{experiment_dir}", exist_ok=True)
     
     # Save final model
@@ -645,11 +761,18 @@ def run_aaf_experiments():
     defense = "aaf"
     
     # Define attacks to evaluate (only Backdoor and Label Flip, plus Clean baseline)
-    attacks = [
-        ("clean", None),
-        ("label_flip", config.LABEL_FLIP_CONFIG),
-        ("backdoor", config.BACKDOOR_CONFIG)
-    ]
+    if hasattr(config, 'TEXT_ENABLED') and config.TEXT_ENABLED:
+        attacks = [
+            ("clean", None),
+            ("label_flip", config.TEXT_LABEL_FLIP_CONFIG),
+            ("backdoor", config.TEXT_BACKDOOR_CONFIG)
+        ]
+    else:
+        attacks = [
+            ("clean", None),
+            ("label_flip", config.LABEL_FLIP_CONFIG),
+            ("backdoor", config.BACKDOOR_CONFIG)
+        ]
     
     # Create results directory
     results_dir = "aaf_results"
@@ -927,17 +1050,21 @@ def run_custom_experiments(attacks, defenses):
 
 def main():
     """Main function to run experiments."""
-    # Define experiments
-    attacks = [
-        ("clean", None),
-        ("label_flip", config.LABEL_FLIP_CONFIG),
-        ("backdoor", config.BACKDOOR_CONFIG),
-        # ("model_replacement", config.MODEL_REPLACEMENT_CONFIG),
-        # # Add additional attacks if desired
-        # ("cascade", config.CASCADE_ATTACK_CONFIG),
-        # ("delta", config.DELTA_ATTACK_CONFIG),
-        # ("novel", config.NOVEL_ATTACK_CONFIG)
-    ]
+    # Define experiments based on whether we're running text or image mode
+    if hasattr(config, 'TEXT_ENABLED') and config.TEXT_ENABLED:
+        print("\nRunning Text Experiments (AG News)")
+        attacks = [
+            ("clean", None),
+            ("label_flip", config.TEXT_LABEL_FLIP_CONFIG),
+            ("backdoor", config.TEXT_BACKDOOR_CONFIG),
+        ]
+    else:
+        print("\nRunning Image Experiments")
+        attacks = [
+            ("clean", None),
+            ("label_flip", config.LABEL_FLIP_CONFIG),
+            ("backdoor", config.BACKDOOR_CONFIG),
+        ]
     
     # Define defenses to test
     defenses = ["fedavg", "krum", "median", "norm_clipping", "aaf"]

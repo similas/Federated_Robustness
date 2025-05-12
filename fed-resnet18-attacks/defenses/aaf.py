@@ -64,7 +64,8 @@ def aaf_aggregate(local_models, sample_counts, device, n_estimators=100, contami
 
 def enhanced_aaf_aggregate(local_models, sample_counts, device, n_estimators=100, contamination=0.2, random_state=42):
     """
-    Enhanced Adaptive Anomaly Filtering (AAF) with improved stability and conservative parameters.
+    Enhanced Adaptive Anomaly Filtering (AAF) with improved stability, conservative parameters,
+    and support for both image and text models.
     """
     # Adaptive contamination - more conservative
     num_clients = len(local_models)
@@ -82,6 +83,13 @@ def enhanced_aaf_aggregate(local_models, sample_counts, device, n_estimators=100
         n_jobs=-1  # Use all available cores
     )
     scaler = StandardScaler()
+    
+    # Detect if we're working with a text model by checking for typical parameter names
+    is_text_model = False
+    if local_models and any(('distilbert' in key or 'attention' in key or 'transformer' in key) 
+                          for key in local_models[0].keys()):
+        is_text_model = True
+        print("Detected text model parameters, adapting AAF features")
     
     # Extract and normalize model updates for anomaly detection
     update_features = []
@@ -102,18 +110,58 @@ def enhanced_aaf_aggregate(local_models, sample_counts, device, n_estimators=100
         update_norm = 0
         layer_features = []
         
-        for key in update.keys():
-            # Calculate deviation from average
-            deviation = (update[key].float() - avg_model[key]).cpu().numpy()
-            param_norm = np.linalg.norm(deviation.flatten())
-            update_norm += param_norm ** 2
+        # Different feature extraction for text vs. image models
+        if is_text_model:
+            # Group parameters by layer type for text models
+            embedding_params = []
+            attention_params = []
+            transformer_params = []
+            classifier_params = []
             
-            # Extract layer features
-            param_mean = np.mean(np.abs(deviation))
-            param_std = np.std(deviation)
-            param_max = np.max(np.abs(deviation))
+            for key in update.keys():
+                # Calculate deviation from average
+                deviation = (update[key].float() - avg_model[key]).cpu().numpy()
+                param_norm = np.linalg.norm(deviation.flatten())
+                update_norm += param_norm ** 2
+                
+                # Categorize parameters
+                if 'embeddings' in key:
+                    embedding_params.append(param_norm)
+                elif 'attention' in key:
+                    attention_params.append(param_norm)
+                elif 'classifier' in key or 'pre_classifier' in key:
+                    classifier_params.append(param_norm)
+                else:
+                    transformer_params.append(param_norm)
             
-            layer_features.extend([param_norm, param_mean, param_std, param_max])
+            # Extract layer-specific features
+            for params, name in [(embedding_params, 'embedding'), 
+                                (attention_params, 'attention'),
+                                (transformer_params, 'transformer'),
+                                (classifier_params, 'classifier')]:
+                if params:
+                    layer_features.extend([
+                        np.mean(params),
+                        np.std(params),
+                        np.max(params)
+                    ])
+                else:
+                    # Add zeros if no parameters in this category
+                    layer_features.extend([0, 0, 0])
+        else:
+            # Original feature extraction for image models
+            for key in update.keys():
+                # Calculate deviation from average
+                deviation = (update[key].float() - avg_model[key]).cpu().numpy()
+                param_norm = np.linalg.norm(deviation.flatten())
+                update_norm += param_norm ** 2
+                
+                # Extract layer features
+                param_mean = np.mean(np.abs(deviation))
+                param_std = np.std(deviation)
+                param_max = np.max(np.abs(deviation))
+                
+                layer_features.extend([param_norm, param_mean, param_std, param_max])
         
         # Global update norm
         global_update_norm = np.sqrt(update_norm)
