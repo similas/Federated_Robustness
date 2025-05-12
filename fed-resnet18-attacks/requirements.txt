@@ -86,7 +86,7 @@ mypy_extensions==1.1.0
 narwhals==1.37.1
 nest-asyncio==1.6.0
 networkx==3.4.2
-numpy==2.2.4
+# numpy==2.2.4
 oauthlib==3.2.2
 openai==1.76.2
 openapi-pydantic==0.5.1
