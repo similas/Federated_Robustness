@@ -90,7 +90,7 @@ networkx==3.4.2
 oauthlib==3.2.2
 openai==1.76.2
 openapi-pydantic==0.5.1
-orjson==3.10.17
+# orjson==3.10.17
 pandas==2.2.3
 pdfminer==20191125
 pdfminer.six==20250416
