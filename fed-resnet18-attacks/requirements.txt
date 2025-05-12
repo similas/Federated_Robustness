@@ -130,7 +130,7 @@ requests==2.32.3
 requests-oauthlib==2.0.0
 requests-toolbelt==1.0.0
 rich==14.0.0
-rpds-py==0.24.0
+rpds-py
 rsa==4.9
 ruff==0.11.8
 safehttpx==0.1.6
