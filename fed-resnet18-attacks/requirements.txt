@@ -132,7 +132,7 @@ requests-toolbelt==1.0.0
 rich==14.0.0
 rpds-py
 rsa==4.9
-ruff==0.11.8
+ruff
 safehttpx==0.1.6
 safetensors==0.5.3
 scikit-learn==1.6.1
