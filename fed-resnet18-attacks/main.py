@@ -1067,7 +1067,7 @@ def main():
         ]
     
     # Define defenses to test
-    defenses = ["fedavg", "krum", "median", "norm_clipping", "aaf"]
+    defenses = ["fedavg", "aaf"]
     
     # For faster testing with fewer combinations, use a subset
     # attacks = [("clean", None), ("label_flip", config.LABEL_FLIP_CONFIG)]
